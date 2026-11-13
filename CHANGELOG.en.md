@@ -8,6 +8,12 @@ All notable changes are recorded here. Format follows [Keep a Changelog](https:/
 
 ### Added
 
+### Fixed
+
+## [0.2.0] - 2026-11-14
+
+### Added
+
 - **Copyable exact ID**: the details pane has a dedicated ID box (monospaced, with a copy button) and the context menu offers "copy exact ID". `winget list` prints a real Id column (`7zip.7zip`, `Docker.DockerDesktop`, `ARP\Machine\X64\...`, `MSIX\Microsoft.AV1VideoExtension_...`) but inside a list it is a secondary line of text; there has to be an explicit way to take it, because hand-copying an ARP or MSIX id with its braces and backslashes is not realistic.
 - **`winget show` info block**: the details pane can query the package's full metadata (version / publisher / description / homepage / license / tags / installer type and URL) and parses it into a flat key-value table. A row starts with a "Query info" button that becomes "Query again" once a result is in. ARP and MSIX rows have no manifest, so the pane explains that rather than showing an empty table.
 - **The project-page button uses the real homepage**: it used to guess a search URL from the package name. Now it takes `Homepage` from `winget show` (accepting only absolute `http(s)` URLs) and opens it directly when known, otherwise it queries first. Scoop has no equivalent command, and the pane says so instead of pretending to look it up.
@@ -47,7 +53,6 @@ All notable changes are recorded here. Format follows [Keep a Changelog](https:/
 
 ### Fixed
 
-- **Discover did not recognize installed packages**: WinGet's Neovim search result has the same exact ID as `winget list` (case-insensitively), but Discover still showed "not installed" because search rows never merged the installed inventory's version and capabilities. It now merges installed version, provenance, available upgrade target and uninstall capability by manager + case-insensitive exact ID. The candidate's original source/ID stays intact; packages that are actually absent still offer only Install.
 - **Discover did not recognize installed packages**: a search result whose exact ID matches an installed package (case-insensitively, source and scope excluded) now carries that package's installed version, provenance, upgrade target and uninstall capability. Neovim's `Neovim.Neovim` result therefore shows 0.12.6 and offers Uninstall, while genuinely absent results keep offering only Install. The candidate's own source/ID stays intact. Verified by `packages_dev.exe --fake --search neovim --tab-cycle-check`.
 - **Switching tabs cleared Discover**: `setTab()` emptied the query text and the search snapshot whenever Discover was left, so returning to Discover showed an empty list even though the search had succeeded (and an in-flight result was dropped). Each tab now owns its query state: Discover's text and results survive round trips, an in-flight search still lands into its snapshot, and emptying the Discover box is the explicit way to clear it. The same rule applies to the other tabs — Installed's filter, Updates' listing and the queue state are never discarded on tab change. The status line only reports "Searching…" while Discover is active. The harness's new `--tab-cycle-check` asserts both behaviors.
 - **The Updates tab was empty after every restart**: `saveCache()` wrote only the installed snapshot, so the update listing was never persisted. Every restart therefore had to wait for `winget list --upgrade-available` plus a bucket scan (tens of seconds) before that tab could be used, showing an empty page and "not scanned yet" in the meantime. The update listing is now stored in the same `cache.json` (written in one pass, so a crash between two writes cannot leave one behind), with its own `updatesAt`: it is a different query and must not share the inventory's timestamp. Measured: after one cold scan the cache holds 17 update records, and the next warm launch passes `--expect-rows 14` before the event loop starts (3 of the 17 carry a target shaped like `< 2026.3.1`, which cannot prove an upgrade, so that tab does not list them).
