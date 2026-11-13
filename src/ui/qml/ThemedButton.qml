@@ -13,28 +13,43 @@ Button {
     // Optional emphasis: "primary" for the confirming action, "danger" for a
     // destructive one, empty for an ordinary button.
     property string kind: ""
+    // Optional Segoe Fluent Icons glyph shown before the label.
+    property string glyph: ""
 
     implicitHeight: theme.smallFont + 16
-    leftPadding: 12
+    leftPadding: glyph !== "" ? 10 : 12
     rightPadding: 12
 
     font.family: theme.fontFamily
     font.pixelSize: theme.metaFont
 
-    contentItem: Text {
-        text: control.text
-        font: control.font
-        horizontalAlignment: Text.AlignHCenter
-        verticalAlignment: Text.AlignVCenter
-        elide: Text.ElideRight
-        color: {
-            if (!control.enabled)
-                return theme.faint
-            if (control.kind === "primary")
-                return theme.accentText
-            if (control.kind === "danger")
-                return theme.danger
-            return theme.text
+    contentItem: Row {
+        spacing: 6
+        Text {
+            anchors.verticalCenter: parent.verticalCenter
+            visible: control.glyph !== ""
+            text: control.glyph
+            color: control.enabled && control.kind === "primary"
+                       ? theme.accentText
+                       : control.enabled && control.kind === "danger"
+                             ? theme.danger : theme.subtext
+            font.family: "Segoe Fluent Icons"
+            font.pixelSize: control.font.pixelSize
+        }
+        Text {
+            anchors.verticalCenter: parent.verticalCenter
+            text: control.text
+            font: control.font
+            elide: Text.ElideRight
+            color: {
+                if (!control.enabled)
+                    return theme.faint
+                if (control.kind === "primary")
+                    return theme.accentText
+                if (control.kind === "danger")
+                    return theme.danger
+                return theme.text
+            }
         }
     }
 

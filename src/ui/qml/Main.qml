@@ -86,11 +86,13 @@ ApplicationWindow {
 
             ThemedButton {
                 text: window.t("刷新", "Refresh")
+                glyph: "\uE72C"
                 enabled: !controller.busy
                 onClicked: controller.refreshAll()
             }
             ThemedButton {
                 text: window.t("设置", "Settings")
+                glyph: "\uE713"
                 onClicked: settingsPopup.open()
             }
         }
@@ -119,29 +121,40 @@ ApplicationWindow {
 
                 Repeater {
                     model: [
-                        { key: "installed", zh: "已安装", en: "Installed" },
-                        { key: "discover", zh: "发现", en: "Discover" },
-                        { key: "updates", zh: "更新", en: "Updates" },
-                        { key: "tasks", zh: "任务", en: "Tasks" }
+                        { key: "installed", zh: "已安装", en: "Installed", glyph: "\uE7B8" },
+                        { key: "discover", zh: "发现", en: "Discover", glyph: "\uE8A3" },
+                        { key: "updates", zh: "更新", en: "Updates", glyph: "\uE896" },
+                        { key: "tasks", zh: "任务", en: "Tasks", glyph: "\uE9F5" }
                     ]
                     delegate: Item {
                         required property var modelData
-                        width: tabLabel.width + 24
+                        width: tabRow.implicitWidth + 24
                         height: theme.tabHeight + 2
                         Rectangle {
                             anchors.fill: parent
                             color: tabMouse.containsMouse ? theme.hover : "transparent"
                         }
-                        Text {
-                            id: tabLabel
+                        Row {
+                            id: tabRow
                             anchors.centerIn: parent
-                            text: window.t(modelData.zh, modelData.en) +
-                                  (modelData.key === "tasks" && controller.activeTasks > 0
-                                       ? " " + controller.activeTasks : "")
-                            color: controller.tab === modelData.key ? theme.text : theme.subtext
-                            font.family: theme.fontFamily
-                            font.pixelSize: theme.smallFont
-                            font.weight: controller.tab === modelData.key ? Font.DemiBold : Font.Normal
+                            spacing: 6
+                            Text {
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: modelData.glyph
+                                color: controller.tab === modelData.key ? theme.accentLine : theme.faint
+                                font.family: "Segoe Fluent Icons"
+                                font.pixelSize: theme.smallFont
+                            }
+                            Text {
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: window.t(modelData.zh, modelData.en) +
+                                      (modelData.key === "tasks" && controller.activeTasks > 0
+                                           ? " " + controller.activeTasks : "")
+                                color: controller.tab === modelData.key ? theme.text : theme.subtext
+                                font.family: theme.fontFamily
+                                font.pixelSize: theme.smallFont
+                                font.weight: controller.tab === modelData.key ? Font.DemiBold : Font.Normal
+                            }
                         }
                         Rectangle {
                             anchors.bottom: parent.bottom
