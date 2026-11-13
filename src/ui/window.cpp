@@ -80,7 +80,47 @@ Controller::Controller(QObject* parent) : QObject(parent)
     loadCache();
 }
 
-Controller::~Controller() = default;
+Controller::~Controller()
+{
+    // Every worker is joined, not detached. A detached worker that posted a
+    // callback after the controller was destroyed dereferenced freed memory, and
+    // an installer window that outlived the host made that likely rather than
+    // theoretical. Cancellation is signalled first so a waiting installer does not
+    // hold shutdown for its full timeout.
+    m_shuttingDown.store(true);
+    if (m_runCancel)
+        m_runCancel->store(true);
+    std::lock_guard<std::mutex> lock(m_workerMutex);
+    for (auto& worker : m_workers) {
+        if (worker.thread.joinable())
+            worker.thread.join();
+    }
+    m_workers.clear();
+}
+
+void Controller::spawnWorker(std::function<void()> body)
+{
+    if (m_shuttingDown.load())
+        return;
+    std::lock_guard<std::mutex> lock(m_workerMutex);
+    // Reap finished workers before adding another: a resident plugin runs for days,
+    // and joinable threads that are never joined accumulate handles.
+    for (auto it = m_workers.begin(); it != m_workers.end();) {
+        if (it->done->load()) {
+            if (it->thread.joinable())
+                it->thread.join();
+            it = m_workers.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    auto done = std::make_shared<std::atomic_bool>(false);
+    std::thread thread([this, body = std::move(body), done] {
+        body();
+        done->store(true);
+    });
+    m_workers.push_back(Worker{std::move(thread), done});
+}
 
 void Controller::attachModels(PackagesModel* packages, TasksModel* tasks)
 {
@@ -243,7 +283,7 @@ void Controller::startBackendRefresh()
     scoopAdapter().invalidateCaches();
 
     auto* self = this;
-    std::thread worker([self] {
+    spawnWorker([self] {
         // The two backends are independent: winget's list takes seconds on its
         // own, and running scoop after it doubles the wait for no benefit. Each
         // runs on its own thread, and the results are joined before marshalling
@@ -282,7 +322,6 @@ void Controller::startBackendRefresh()
             },
             Qt::QueuedConnection);
     });
-    worker.detach();   // the result arrives through the queued call
 }
 
 void Controller::applyRefreshResults(const ProbeResult& wingetProbe, const ProbeResult& scoopProbe,
@@ -945,7 +984,7 @@ void Controller::startSearchWorker()
     emit searchStateChanged();
 
     auto* self = this;
-    std::thread worker([self, needle] {
+    spawnWorker([self, needle] {
         // Both searches are read-only and touch no QObject on this thread.
         Snapshot wingetSearch = wingetAdapter().search(self->m_wingetProbe, toString(needle), nullptr);
         Snapshot scoopSearch = scoopAdapter().search(self->m_scoopProbe, toString(needle), nullptr);
@@ -956,7 +995,6 @@ void Controller::startSearchWorker()
             },
             Qt::QueuedConnection);
     });
-    worker.detach();
 }
 
 void Controller::applySearchResults(const QString& needle, const Snapshot& wingetSearch,
@@ -1002,12 +1040,10 @@ void Controller::selectRow(int row)
     if (m_packages)
         m_packages->setSelected(row);
     emit selectionChanged();
-    // Selecting a row is a request to see what it is, and `winget show` is the
-    // only source of the publisher, description and real homepage. Fetch it once
-    // per selection instead of making the user press a button to discover that
-    // the package had information all along. A row that is already loaded is not
-    // fetched again.
-    if (row >= 0 && m_packageInfoRow != row && !m_packageInfoBusy)
+    // Selecting a new package invalidates any old reply, even if its request is
+    // still in flight. requestPackageInfo is keyed by exact id, so it can safely
+    // replace the older lookup rather than leave this pane waiting for it.
+    if (row >= 0 && m_packageInfoRow != row)
         requestPackageInfo(row);
 }
 
@@ -1039,6 +1075,59 @@ void Controller::copyToClipboard(const QString& text)
 int Controller::selectedRow() const
 {
     return m_packages ? m_packages->selected() : -1;
+}
+
+void Controller::openUrl(const QString& url)
+{
+    // The same rule the homepage action follows: metadata is third-party data, so
+    // only an absolute http(s) address is opened. A file: or javascript: URL that
+    // a manifest carried would otherwise be launched by this click.
+    const QUrl parsed = QUrl::fromUserInput(url.trimmed());
+    const QString scheme = parsed.scheme().toLower();
+    if (parsed.isEmpty() || !parsed.isValid() || (scheme != QStringLiteral("http") &&
+                                                  scheme != QStringLiteral("https"))) {
+        m_copyNotice = text("这个地址不是 http(s)，没有打开。",
+                            "That address is not http(s), so it was not opened.");
+        emit copyNoticeChanged();
+        return;
+    }
+    QDesktopServices::openUrl(parsed);
+    emit statusChanged();
+}
+
+void Controller::copyPackageInfo()
+{
+    if (m_packageInfo.isEmpty() && m_packageInfoId.isEmpty()) {
+        m_copyNotice = text("还没有可复制的包信息。", "There is no package metadata to copy yet.");
+        emit copyNoticeChanged();
+        return;
+    }
+    // Ordered so the paste reads like the window: identity first, then publisher,
+    // then installer internals. The map itself has no order.
+    static const char* const order[] = {
+        "version",     "publisher", "publisherUrl", "publisherSupportUrl", "author",
+        "moniker",     "homepage",  "license",      "licenseUrl",           "copyright",
+        "privacyUrl",  "installerType", "installerLocale", "installerArchitecture",
+        "installerUrl", "installerSha256", "releaseDate",
+    };
+    QString out = m_packageInfoId.isEmpty() ? QString() : QStringLiteral("id: ") + m_packageInfoId + QStringLiteral("\n");
+    auto append = [&out](const QString& key, const QString& value) {
+        if (!value.isEmpty())
+            out += key + QStringLiteral(": ") + value + QStringLiteral("\n");
+    };
+    for (const char* key : order)
+        append(QString::fromUtf8(key), m_packageInfo.value(QString::fromUtf8(key)).toString());
+    append(QStringLiteral("description"), m_packageInfo.value(QStringLiteral("description")).toString());
+    append(QStringLiteral("tags"), m_packageInfo.value(QStringLiteral("tags")).toString());
+    append(QStringLiteral("releaseNotes"), m_packageInfo.value(QStringLiteral("releaseNotes")).toString());
+    if (QClipboard* clipboard = QGuiApplication::clipboard()) {
+        clipboard->setText(out);
+        m_copyNotice = text("已复制该包的元数据。", "Copied the package metadata.");
+    } else {
+        m_copyNotice = text("无法访问剪贴板。", "The clipboard is not available.");
+    }
+    emit copyNoticeChanged();
+    emit statusChanged();
 }
 
 void Controller::copyTaskLog(qulonglong id)
@@ -1152,7 +1241,7 @@ void Controller::requestPackageInfo(int row)
     // The answer is keyed by the exact id, not the row index: a tab switch reuses
     // row numbers for different packages, and a reply arriving after that would
     // otherwise describe the package that used to be at that index.
-    std::thread worker([self, id, row, executable] {
+    spawnWorker([self, id, row, executable] {
         std::map<std::string, std::string> fields;
         std::string error;
         {
@@ -1194,21 +1283,29 @@ void Controller::requestPackageInfo(int row)
                 };
                 put("homepage", "homepage");
                 put("publisher", "publisher");
+                put("publisherUrl", "publisherurl");
+                put("publisherSupportUrl", "publishersupporturl");
                 put("author", "author");
                 put("license", "license");
+                put("licenseUrl", "licenseurl");
+                put("copyright", "copyright");
+                put("privacyUrl", "privacyurl");
                 put("description", "description");
                 put("tags", "tags");
                 put("installerType", "installertype");
+                put("installerLocale", "installerlocale");
+                put("installerArchitecture", "installerarchitecture");
                 put("installerUrl", "installerurl");
                 put("installerSha256", "installersha256");
                 put("releaseDate", "releasedate");
+                put("releaseNotes", "releasenotes");
                 put("moniker", "moniker");
+                put("version", "version");
                 emit self->packageInfoChanged();
                 emit self->statusChanged();
             },
             Qt::QueuedConnection);
     });
-    worker.detach();
 }
 
 void Controller::resetReview()
@@ -1224,8 +1321,7 @@ void Controller::resetReview()
     emit reviewChanged();
 }
 
-void Controller::openReviewFor(int row, const QString& actionId)
-{
+void Controller::openReviewFor(int row, const QString& actionId){
     if (!m_packages)
         return;
     const auto& rows = m_packages->rows();
@@ -1376,6 +1472,10 @@ void Controller::buildReview(Action action)
                               "The installed version is re-read after the run; exit code 0 is not success")},
         {"metadataAt", QString::fromStdString(p.metadataAt)},
         {"risk", reviewRisk()},
+        {"interactive", action == Action::Upgrade || action == Action::Install
+                            ? text("安装器可能弹出自己的卸载/安装窗口；插件会等它结束，不会替你点击。",
+                                   "The installer may show its own uninstall/install window; the plugin waits for it and will not click for you.")
+                            : QString()},
     };
     m_reviewConfirmEnabled = false;
 }
@@ -1470,14 +1570,14 @@ void Controller::confirmAndQueue()
 {
     if (!m_reviewConfirmEnabled || m_reviewPlan.state != PlanState::Ready)
         return;
-    // Consent is recorded per agreement, in the order the plan expects. The
-    // executor hands exactly these to buildMutation; nothing else ever adds an
-    // agreement flag.
-    m_acceptedAgreements.clear();
-    if (m_sourceAgreed)
-        m_acceptedAgreements.push_back("source");
+    // Consent is recorded per agreement, in the order the plan expects, and stored
+    // on the task itself. The executor hands exactly these to buildMutation, and
+    // nothing else ever adds an agreement flag.
+    std::vector<std::string> accepted;
+    if (m_sourceAgreed && m_needsSourceAgreement)
+        accepted.push_back("source");
     if (m_installerAgreed)
-        m_acceptedAgreements.push_back("installer");
+        accepted.push_back("installer");
 
     Plan plan = m_reviewPlan;
     if (!confirmPlan(plan, "now")) {
@@ -1487,7 +1587,7 @@ void Controller::confirmAndQueue()
         emit reviewChanged();
         return;
     }
-    const auto result = m_queue.enqueue(plan);
+    const auto result = m_queue.enqueue(plan, accepted);
     if (!result.accepted) {
         m_blockedReason = QString::fromStdString(result.reason);
         emit reviewChanged();
@@ -1730,16 +1830,22 @@ void Controller::runOneTask(unsigned long long id)
         return;
     const Plan plan = task->plan;
     const Manager manager = plan.key.manager;
+    // Consent is copied per task. The executor used to read the controller's single
+    // "latest review" vector from a worker thread while the GUI thread could still
+    // be rewriting it for the next review: a read of a vector being mutated is
+    // undefined behaviour, and it also meant a queued task could run with the
+    // agreements of a review that came after it.
+    const std::vector<std::string> accepted = task->agreements;
 
     auto* self = this;
     auto cancel = std::make_shared<std::atomic_bool>(false);
     // requestCancelLastRunning writes the current one; the run reads it.
     m_runCancel = cancel;
 
-    std::thread worker([self, id, plan, manager, cancel] {
+    spawnWorker([self, id, plan, manager, cancel, accepted] {
         Adapter& adapter = self->adapterFor(manager);
 
-        const CommandSpec spec = adapter.buildMutation(plan, self->m_acceptedAgreements);
+        const CommandSpec spec = adapter.buildMutation(plan, accepted);
         {
             const std::string planned =
                 std::string("计划：") + actionId(plan.action) + " " + plan.key.id +
@@ -1788,9 +1894,32 @@ void Controller::runOneTask(unsigned long long id)
 
             platform::RunOptions options = spec.options;
             options.cancelAtomic = cancel.get();
+            if (options.interactiveAllowed) {
+                // Upgrade is allowed to hand over to the backend's own uninstaller
+                // window. Mark this before blocking in run(), not after it returns:
+                // the host window stays themed and the task row explains the wait.
+                QMetaObject::invokeMethod(self, [self, id, step] {
+                    self->m_queue.setInteractivePending(id, true);
+                    const std::string line = self->chinese()
+                        ? "等待 WinGet 的卸载/安装界面完成。按提示操作；插件不会替你点击。"
+                        : "Waiting for WinGet's uninstall/install UI. Follow its prompts; the plugin will not click for you.";
+                    self->logLine(id, step.c_str(), "info", line);
+                    if (self->m_tasks)
+                        self->m_tasks->setTasks(self->m_queue.tasks());
+                    emit self->tasksChanged();
+                }, Qt::QueuedConnection);
+            }
             const auto result = platform::run(options);
             exitCode = result.exitCode;
             ran = true;
+            if (options.interactiveAllowed) {
+                QMetaObject::invokeMethod(self, [self, id] {
+                    self->m_queue.setInteractivePending(id, false);
+                    if (self->m_tasks)
+                        self->m_tasks->setTasks(self->m_queue.tasks());
+                    emit self->tasksChanged();
+                }, Qt::QueuedConnection);
+            }
             {
                 // The command line and its output are the only evidence of what
                 // happened, so they go in the log — redacted, because both can
@@ -1864,7 +1993,6 @@ void Controller::runOneTask(unsigned long long id)
             self->onTaskFinished(id);
         }, Qt::QueuedConnection);
     });
-    worker.detach();
 }
 
 void Controller::onTaskFinished(unsigned long long id)

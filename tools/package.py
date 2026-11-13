@@ -91,6 +91,7 @@ DEV_FILES = [
     "src/ui/qml/ThemedField.qml",
     "src/ui/qml/ThemedCheckBox.qml",
     "src/ui/qml/RowMenu.qml",
+    "src/ui/qml/PackageInfoWindow.qml",
     "tests/core_tests.cpp",
     "tests/theme_tokens_tests.cpp",
     "tests/process_tests.cpp",

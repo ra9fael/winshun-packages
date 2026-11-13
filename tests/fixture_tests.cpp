@@ -445,7 +445,12 @@ void wingetShowFixture()
     CHECK(fields.at("publisher") == "Docker Inc.");
     CHECK(fields.at("license") == "Proprietary");
     CHECK(fields.at("moniker") == "docker");
-    CHECK(fields.at("publisherurl") == "https://www.docker.com/");
+    CHECK(fields.at("author") == "Docker Inc.");
+    CHECK(fields.at("licenseurl") == "https://www.docker.com/legal/docker-subscription-service-agreement");
+    CHECK(fields.at("copyright").find("Docker Inc.") != std::string::npos);
+    CHECK(fields.at("privacyurl") == "https://www.docker.com/legal/privacy");
+    CHECK(fields.at("tags").find("container") != std::string::npos);
+    CHECK(fields.at("releasedate") == "2026-11-05");
     // The homepage is the whole point of this parse: it is what the project-page
     // action opens instead of a search guess.
     CHECK(pkg::winget::homepageFromShow(fields) == "https://www.docker.com/products/docker-desktop");

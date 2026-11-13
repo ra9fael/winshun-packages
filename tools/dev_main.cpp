@@ -77,6 +77,8 @@ struct Options {
     // Selects (not checks) one row before the capture. The details pane is the
     // only surface that shows the metadata lookup, and it needs a selected row.
     int focusRow = -1;
+    bool showInfoWindow = false;
+    int showInfoRow = -1;
     // Holds the "searching" state for N ms so the in-box spinner can be captured.
     // A fake run deliberately starts no backend, so the spinner otherwise never
     // appears and the one visual it exists for could not be checked.
@@ -119,6 +121,7 @@ void usage()
     "  --tab-cycle-check  check that Discover text and rows survive tab switching\n"
         "                     (requires --fake and --search)\n"
         "  --focus-row N      select row N without checking it (shows the metadata pane)\n"
+        "  --show-info-window open the full metadata window for the focused row\n"
         "  --hold-searching MS hold the search spinner for MS so it can be captured\n"
         "  --review INDEX     select row INDEX, open the review page, and continue\n"
         "                     (add :uninstall to also choose the uninstall action)\n"
@@ -205,6 +208,8 @@ bool parse(int argc, char** argv, Options& options)
             options.tabCycleCheck = true;
         } else if (arg == QStringLiteral("--focus-row")) {
             options.focusRow = valueOf(argc, argv, i, "--focus-row").toInt();
+        } else if (arg == QStringLiteral("--show-info-window")) {
+            options.showInfoWindow = true;
         } else if (arg == QStringLiteral("--hold-searching")) {
             options.holdSearchingMs = valueOf(argc, argv, i, "--hold-searching").toInt();
         } else if (arg == QStringLiteral("--log-level")) {
@@ -891,7 +896,22 @@ int main(int argc, char** argv)
             if (options.focusRow >= packagesModel.rowCount())
                 return false;
             controller.selectRow(options.focusRow);
-            say("focus", QStringLiteral("row %1 selected").arg(options.focusRow));
+            say("focus", QStringLiteral("row %1 selected (model=%2, rows=%3)")
+                               .arg(options.focusRow)
+                               .arg(packagesModel.selected())
+                               .arg(packagesModel.rowCount()));
+            if (options.showInfoWindow) {
+                QTimer::singleShot(250, &app, [&] {
+                    if (auto* window = scene->window->findChild<QQuickWindow*>("packageInfoWindow")) {
+                        window->setProperty("packageIndex", options.focusRow);
+                        window->show();
+                        window->raise();
+                        window->requestActivate();
+                    } else {
+                        std::fprintf(stderr, "show-info-window error: metadata window not found\n");
+                    }
+                });
+            }
             return true;
         };
         if (!applyFocus()) {

@@ -282,7 +282,6 @@ RunResult run(const RunOptions& options)
     // CREATE_SUSPENDED lets the child join our job before it can spawn anything,
     // so an installer's own children are all inside the job too.
     creationFlags |= CREATE_SUSPENDED;
-
     const std::wstring application = toWide(options.application);
     const std::wstring workingDirectory =
         options.workingDirectory.empty() ? std::wstring() : toWide(options.workingDirectory);

@@ -17,8 +17,12 @@
 #include <QVariantMap>
 
 #include <atomic>
+#include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
+#include <thread>
+#include <vector>
 
 #include "../adapters/adapter.h"
 #include "../core/model.h"
@@ -247,6 +251,12 @@ public slots:
     // Copies text to the system clipboard. The context menu's "copy exact ID" is
     // the only way to get an identity out of the window without retyping it.
     void copyToClipboard(const QString& text);
+    // Opens a URL from package metadata. Only an absolute http(s) URL is opened:
+    // every one of these comes from a third-party manifest.
+    Q_INVOKABLE void openUrl(const QString& url);
+    // Copies the whole `winget show` record as text, so the window's content can
+    // leave the window without retyping it.
+    Q_INVOKABLE void copyPackageInfo();
     // Copies one task's whole redacted log, so a failure can be pasted into a bug
     // report instead of being read off the screen. The log is already redacted
     // when it is written, so nothing here needs to sanitise it again.
@@ -314,6 +324,11 @@ private:
     bool isInstalled(const PackageKey& key) const;
     void startBackendRefresh();
     void startSearchWorker();
+    // Own detached-style workers until completion. The host may shut down the
+    // plugin while a queued installer is open; the controller signals cancel and
+    // joins workers before its QObject lifetime ends, so their queued callbacks
+    // can never dereference a destroyed controller.
+    void spawnWorker(std::function<void()> body);
     void applySearchResults(const QString& needle, const Snapshot& wingetSearch, const Snapshot& scoopSearch);
     void applyRefreshResults(const ProbeResult& wingetProbe, const ProbeResult& scoopProbe,
                              const Snapshot& wingetInstalled, const Snapshot& scoopInstalled,
@@ -357,11 +372,14 @@ private:
 
     Queue m_queue;
     Plan m_reviewPlan;
-    // The queued agreements the user checked, carried to the executor. The
-    // review page collects them one by one; the executor hands them to
-    // buildMutation, the only place a command line is formed.
-    std::vector<std::string> m_acceptedAgreements;
     // Set by requestCancelLastRunning; the executor polls it between phases.
+    struct Worker {
+        std::thread thread;
+        std::shared_ptr<std::atomic_bool> done;
+    };
+    std::atomic_bool m_shuttingDown{false};
+    mutable std::mutex m_workerMutex;
+    std::vector<Worker> m_workers;
     std::shared_ptr<std::atomic_bool> m_runCancel;
 
     QString m_locale = QStringLiteral("zh");

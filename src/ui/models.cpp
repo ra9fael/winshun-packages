@@ -74,7 +74,11 @@ QVariant PackagesModel::data(const QModelIndex& index, int role) const
     case HoldRole:
         return qs(p.holdPolicy);
     case UnknownVersionRole:
-        return p.availableKind == "unknown";
+        // "The target cannot be ordered", not "there is no target". The flag used
+        // to be `availableKind == "unknown"`, which is what an absent target was
+        // also recorded as — so every installed package without an update claimed
+        // its version was unknown while the installed version sat right there.
+        return p.availableKind == "unknown" && !p.availableVersion.empty();
     case DuplicateRole: {
         if (row >= static_cast<int>(m_duplicates.size()) || m_duplicates[static_cast<std::size_t>(row)].empty())
             return QString();
@@ -129,12 +133,19 @@ QHash<int, QByteArray> PackagesModel::roleNames() const
 
 void PackagesModel::setRows(const std::vector<Package>& rows)
 {
+    const int previousSelected = m_selected;
     beginResetModel();
     m_rows = rows;
     m_checked = QVector<bool>(static_cast<int>(m_rows.size()), false);
-    if (m_selected >= static_cast<int>(m_rows.size()))
-        m_selected = -1;
+    // A row index refers to a row in one specific snapshot. Preserving it across
+    // a rebuild made both the list and the details pane point at the wrong package
+    // (or stay blank when the numeric index had not changed). Selection is cleared
+    // on every reset; callers that want to keep one must explicitly select its new
+    // index after the rebuild.
+    m_selected = -1;
     endResetModel();
+    if (previousSelected != -1)
+        emit selectedRowChanged();
     emit checkedCountChanged();
 }
 
@@ -153,6 +164,8 @@ void PackagesModel::setSelected(int row)
         emit dataChanged(index(previous), index(previous), {});
     if (row >= 0 && row < rowCount())
         emit dataChanged(index(row), index(row), {});
+    if (previous != row)
+        emit selectedRowChanged();
 }
 
 void PackagesModel::toggleChecked(int row)

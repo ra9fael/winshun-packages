@@ -400,6 +400,12 @@ std::map<std::string, std::string> parseShowOutput(const std::string& text)
 
     std::map<std::string, std::string> fields;
     std::string lastKey;
+    // Group labels whose indented lines are content, not fields of their own.
+    // "Release Notes:" is followed by free-form lines that may contain a colon;
+    // parsing those as fields dropped them from the notes.
+    auto isFreeTextGroup = [](const std::string& key) {
+        return key == "tags" || key == "releasenotes";
+    };
     for (const auto& raw : splitLines(text)) {
         // Trim only trailing whitespace, so an indented grouped value keeps its
         // meaning (the indent is what distinguishes it from a top-level field).
@@ -411,6 +417,29 @@ std::map<std::string, std::string> parseShowOutput(const std::string& text)
             continue;
         }
         const bool indented = line.front() == ' ' || line.front() == '\t';
+        if (indented && lastKey == "releasenotes") {
+            // Preserve the newline: release notes are read as a list of items.
+            std::string& notes = fields["releasenotes"];
+            if (!notes.empty())
+                notes += '\n';
+            notes += trim(line);
+            continue;
+        }
+        if (indented && lastKey == "tags") {
+            std::string& tags = fields["tags"];
+            if (!tags.empty())
+                tags += ' ';
+            tags += trim(line);
+            continue;
+        }
+        if (indented && lastKey == "description") {
+            // A description that wraps at the console width is still one sentence.
+            std::string& description = fields["description"];
+            if (!description.empty())
+                description += ' ';
+            description += trim(line);
+            continue;
+        }
         const std::size_t colon = line.find(':');
         if (colon == std::string::npos) {
             // A continuation of the previous value: a description wraps at the
@@ -430,8 +459,7 @@ std::map<std::string, std::string> parseShowOutput(const std::string& text)
             if (!key.empty())
                 fields[key] = trim(line.substr(colon + 1));
             continue;
-        }
-        // A top-level field. "Found Docker Desktop [Docker.DockerDesktop]" is the
+        }        // A top-level field. "Found Docker Desktop [Docker.DockerDesktop]" is the
         // header line and has no colon before the bracket, so it is skipped by the
         // caller when it looks for "found".
         std::string key = normalizedKey(line.substr(0, colon));

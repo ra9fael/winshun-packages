@@ -379,8 +379,16 @@ CommandSpec WingetAdapter::buildMutation(const Plan& plan, const std::vector<std
     }
 
     spec.ok = true;
-    // baseOptions appends --disable-interactivity, so it appears exactly once.
-    spec.options = baseOptions(m_executable, args, 900000);
+    // A mutation is the one case where interactivity must be allowed through.
+    // `winget upgrade` on a package whose installer cannot upgrade in place
+    // (Pandoc is one) hands over to the old version's own uninstaller UI, and with
+    // --disable-interactivity plus CREATE_NO_WINDOW that UI cannot appear: the
+    // uninstaller either failed or hung, and the upgrade was then torn down
+    // mid-install. The window is the backend's own, so nothing is being delegated
+    // to this plugin; it only has to stop suppressing it.
+    spec.options = baseOptions(m_executable, args, 3600000, /*withInteractivity=*/false);
+    spec.options.allowWindow = true;
+    spec.options.interactiveAllowed = true;
     spec.redactedPreview = "winget";
     for (const auto& a : spec.options.arguments)
         spec.redactedPreview += " " + a;

@@ -214,16 +214,28 @@ Item {
             }
         }
         Text {
+            id: provenanceGlyph
             height: theme.tinyFont + 5
-            visible: root.provenance !== "" && root.provenance !== "none"
-            text: root.provenance === "backend-recorded" || root.provenance === "backend 记录"
-                  ? root.t("管理器已登记", "Manager-managed")
-                  : root.provenance === "observed" || root.provenance === "观察到"
-                    ? root.t("系统记录", "System record") : ""
+            verticalAlignment: Text.AlignVCenter
+            visible: root.provenance === "backend-recorded" || root.provenance === "backend 记录"
+                     || root.provenance === "observed" || root.provenance === "观察到"
+            // A glyph, not a phrase: "管理器已登记" was four characters of jargon on
+            // every row, occupying space that belongs to the version. The details
+            // pane still spells it out for anyone who wonders.
+            text: (root.provenance === "backend-recorded" || root.provenance === "backend 记录")
+                  ? "\u2713" : "\u25CB"
             color: (root.provenance === "backend-recorded" || root.provenance === "backend 记录")
                    ? theme.ok : theme.warn
             font.family: theme.fontFamily
             font.pixelSize: theme.smallFont
+            font.weight: Font.DemiBold
+            HoverHandler { id: provenanceHover }
+            ToolTip.visible: provenanceHover.hovered
+            ToolTip.delay: 400
+            ToolTip.text: (root.provenance === "backend-recorded" || root.provenance === "backend 记录")
+                          ? root.t("包管理器登记了这个包", "The package manager records this package")
+                          : root.t("系统安装记录，包管理器只观察到它",
+                                   "A system install record the manager only observed")
         }
         Text {
             height: theme.tinyFont + 5
@@ -236,7 +248,7 @@ Item {
         Text {
             height: theme.tinyFont + 5
             visible: root.unknownVersion
-            text: qsTr("版本未知")
+            text: qsTr("目标版本无法比较")
             color: theme.warn
             font.family: theme.fontFamily
             font.pixelSize: theme.smallFont

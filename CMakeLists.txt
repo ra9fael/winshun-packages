@@ -90,6 +90,7 @@ qt_add_qml_module(packages
         src/ui/qml/ThemedField.qml
         src/ui/qml/ThemedCheckBox.qml
         src/ui/qml/RowMenu.qml
+        src/ui/qml/PackageInfoWindow.qml
 )
 
 # ---- L1 tests ---------------------------------------------------------------

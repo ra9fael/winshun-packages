@@ -18,6 +18,7 @@ namespace pkg::ui {
 // One row on Installed / Discover / Updates. Field names are the QML roles.
 class PackagesModel : public QAbstractListModel {
     Q_OBJECT
+    Q_PROPERTY(int selectedRow READ selected NOTIFY selectedRowChanged)
 public:
     enum Role {
         NameRole = Qt::UserRole + 1,
@@ -53,9 +54,10 @@ public:
     void setRows(const std::vector<Package>& rows);
     const std::vector<Package>& rows() const { return m_rows; }
 
-    // Selection is presentation state; it never implies an action.
+    // Selection is observable by QML, but remains presentation state: selecting
+    // a row never implies an action.
     Q_INVOKABLE void setSelected(int row);
-    Q_INVOKABLE int selected() const { return m_selected; }
+    int selected() const { return m_selected; }
     Q_INVOKABLE void toggleChecked(int row);
     Q_INVOKABLE void clearChecked();
     Q_INVOKABLE int checkedCount() const;
@@ -81,6 +83,7 @@ public:
 
 signals:
     void checkedCountChanged();
+    void selectedRowChanged();
 
 private:
     std::vector<Package> m_rows;

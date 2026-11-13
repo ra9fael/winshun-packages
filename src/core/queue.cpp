@@ -73,7 +73,7 @@ std::string nowClock()
 
 } // namespace
 
-EnqueueResult Queue::enqueue(const Plan& plan)
+EnqueueResult Queue::enqueue(const Plan& plan, const std::vector<std::string>& agreements)
 {
     EnqueueResult r;
     if (!canRun(plan)) {
@@ -89,6 +89,7 @@ EnqueueResult Queue::enqueue(const Plan& plan)
     Task t;
     t.id = m_nextId++;
     t.plan = plan;
+    t.agreements = agreements;
     t.state = TaskState::Queued;
     m_tasks.push_back(t);
     r.accepted = true;

@@ -64,6 +64,15 @@ struct Task {
     int exitCode = -1;              // -1 until the process reported one
     bool verifiedAfterRun = false;  // the post-run inventory check ran
     std::string blockedReason;
+    // The agreements the user checked for this task. Copied from the review at
+    // enqueue time: reading the controller's single "latest review" field from the
+    // executor meant a second confirmation could change the flags of a task that
+    // was already queued, which is consent recorded for the wrong task.
+    std::vector<std::string> agreements;
+    // Set when the backend's own installer took over interactively (an uninstall
+    // UI that must finish before the upgrade can install). The plugin cannot see
+    // into that window; it waits, and says so.
+    bool interactive = false;
     // Per-step log: what was run, what came back, why it stopped. Kept in memory
     // only (never written to disk: it can contain local paths) and capped, so a
     // long queue cannot grow without bound.
@@ -80,7 +89,10 @@ class Queue {
 public:
     // Accepts a confirmed plan. Refuses a plan that is not confirmed, whose
     // token is empty, or that duplicates an active task on the same identity.
-    EnqueueResult enqueue(const Plan& plan);
+    // Accepts a confirmed plan. `agreements` are the consents the user gave for
+    // this plan; they are stored on the task so the executor never has to read
+    // mutable review state from another thread.
+    EnqueueResult enqueue(const Plan& plan, const std::vector<std::string>& agreements = {});
 
     // Cancels a task that has not started. Returns false when it is already
     // running (which only requests cancellation elsewhere).

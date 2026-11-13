@@ -38,6 +38,10 @@ struct RunOptions {
     std::vector<std::pair<std::string, std::string>> environment;
     // When false the child gets no window; an interactive installer may need one.
     bool allowWindow = false;
+    // The backend may show its own UI (an uninstaller that must be clicked
+    // through). When true, run() does not treat long silences on the pipe as a
+    // stall, because an interactive installer produces no output while it waits.
+    bool interactiveAllowed = false;
 
     // A callback invoked roughly every 250 ms so the UI can show "installer
     // running" without guessing progress. Returning false requests a cancel.

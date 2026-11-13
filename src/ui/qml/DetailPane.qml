@@ -10,6 +10,9 @@ import QtQuick.Layouts
 Flickable {
     id: root
     required property int packageIndex
+    // "More" opens the full metadata record in its own window; this pane only has
+    // room for a summary, and the window is what lays out release notes and tags.
+    signal moreRequested(int index)
     readonly property bool zh: controller.locale.startsWith("zh")
     function t(zhText, enText) { return zh ? zhText : enText }
 
@@ -23,6 +26,11 @@ Flickable {
     // model resets on every query, so the bindings below re-evaluate then.
     readonly property int rowCount: packagesModel ? packagesModel.rowCount() : 0
     readonly property bool hasRow: packageIndex >= 0 && packageIndex < rowCount
+
+    // Declared before use: the summary card reads them, and `infoBlock` is
+    // referenced from delegates inside it.
+    readonly property var info: controller.packageInfo
+    readonly property bool busy: controller.packageInfoBusy
 
     // Named lookup through the model, which resolves the role itself: QML cannot
     // recompute `Qt::UserRole + n` reliably across a context-property model.
@@ -116,76 +124,109 @@ Flickable {
         }
 
         // ---- winget show ------------------------------------------------
-        // The publisher, description and real homepage come from the backend's
-        // own metadata, loaded as soon as the row is selected. The pane used to
-        // show only a button, so a package with rich metadata looked empty.
-        Column {
+        // A summary card, not the whole record: the pane sits beside the list and a
+        // real release note needs the width. "More" opens the full record, laid out
+        // in sections.
+        Rectangle {
             id: infoBlock
+            objectName: "infoBlock"
             width: parent.width
-            topPadding: 10
-            spacing: 3
+            height: infoColumn.implicitHeight + 16
             visible: root.hasRow
+            radius: theme.cardRadius
+            color: theme.layer
+            border.width: 1
+            border.color: theme.divider
 
             readonly property var info: controller.packageInfo
             readonly property bool busy: controller.packageInfoBusy
-            readonly property var infoKeys: ["publisher", "license", "moniker", "installerType", "homepage"]
+            readonly property var infoKeys: ["publisher", "author", "license",
+                                             "installerType", "releaseDate", "homepage"]
 
-            Text {
-                width: parent.width
-                text: infoBlock.busy ? root.t("正在读取包信息…", "Reading package metadata…")
-                                     : root.t("包信息", "Package metadata")
-                color: theme.faint
-                font.family: theme.fontFamily
-                font.pixelSize: theme.tinyFont
-            }
-            Text {
-                width: parent.width
-                visible: !infoBlock.busy && String(infoBlock.info["note"] || "").length > 0
-                wrapMode: Text.WordWrap
-                text: visible ? String(infoBlock.info["note"]) : ""
-                color: theme.warn
-                font.family: theme.fontFamily
-                font.pixelSize: theme.tinyFont
-            }
-            Text {
-                width: parent.width
-                visible: String(infoBlock.info["description"] || "").length > 0
-                wrapMode: Text.WordWrap
-                text: String(infoBlock.info["description"] || "")
-                color: theme.subtext
-                font.family: theme.fontFamily
-                font.pixelSize: theme.tinyFont
-            }
-            Repeater {
-                model: infoBlock.infoKeys
-                delegate: Row {
-                    required property string modelData
-                    width: infoBlock.width
-                    visible: String(infoBlock.info[modelData] || "").length > 0
-                    height: visible ? theme.smallFont + 4 : 0
-                    spacing: 8
-                    Text {
-                        width: 74
-                        height: theme.smallFont + 4
-                        verticalAlignment: Text.AlignVCenter
-                        text: modelData === "publisher" ? root.t("发布者", "Publisher")
-                            : modelData === "license" ? root.t("协议", "License")
-                            : modelData === "moniker" ? root.t("别名", "Moniker")
-                            : modelData === "installerType" ? root.t("安装器", "Installer")
-                            : root.t("官网", "Homepage")
-                        color: theme.faint
-                        font.family: theme.fontFamily
-                        font.pixelSize: theme.tinyFont
+            Column {
+                id: infoColumn
+                x: 8
+                y: 8
+                width: parent.width - 16
+                spacing: 2
+
+                Text {
+                    width: parent.width
+                    text: infoBlock.busy ? root.t("正在读取包信息…", "Reading package metadata…")
+                                         : root.t("包信息", "Package metadata")
+                    color: theme.faint
+                    font.family: theme.fontFamily
+                    font.pixelSize: theme.tinyFont
+                }
+                Text {
+                    width: parent.width
+                    visible: !infoBlock.busy && String(infoBlock.info["note"] || "").length > 0
+                    wrapMode: Text.WordWrap
+                    text: visible ? String(infoBlock.info["note"]) : ""
+                    color: theme.warn
+                    font.family: theme.fontFamily
+                    font.pixelSize: theme.tinyFont
+                }
+                Text {
+                    width: parent.width
+                    // Two lines of description in the card; the rest is in the
+                    // full record. A paragraph here pushed the action buttons off
+                    // the pane.
+                    visible: String(infoBlock.info["description"] || "").length > 0
+                    wrapMode: Text.WordWrap
+                    maximumLineCount: 3
+                    elide: Text.ElideRight
+                    text: String(infoBlock.info["description"] || "")
+                    color: theme.subtext
+                    font.family: theme.fontFamily
+                    font.pixelSize: theme.tinyFont
+                }
+                Repeater {
+                    model: infoBlock.infoKeys
+                    delegate: Row {
+                        required property string modelData
+                        width: infoColumn.width
+                        visible: String(infoBlock.info[modelData] || "").length > 0
+                        height: visible ? theme.smallFont + 4 : 0
+                        spacing: 8
+                        Text {
+                            width: 64
+                            height: theme.smallFont + 4
+                            verticalAlignment: Text.AlignVCenter
+                            text: modelData === "publisher" ? root.t("发布者", "Publisher")
+                                : modelData === "author" ? root.t("作者", "Author")
+                                : modelData === "license" ? root.t("协议", "License")
+                                : modelData === "installerType" ? root.t("安装器", "Installer")
+                                : modelData === "releaseDate" ? root.t("发布", "Released")
+                                : root.t("官网", "Homepage")
+                            color: theme.faint
+                            font.family: theme.fontFamily
+                            font.pixelSize: theme.tinyFont
+                        }
+                        Text {
+                            width: Math.max(60, infoColumn.width - 80)
+                            height: theme.smallFont + 4
+                            verticalAlignment: Text.AlignVCenter
+                            text: String(infoBlock.info[modelData] || "")
+                            color: modelData === "homepage" ? theme.accentLine : theme.text
+                            font.family: modelData === "homepage" || modelData === "publisher"
+                                       ? theme.fontFamily : theme.monoFamily
+                            font.pixelSize: theme.tinyFont
+                            elide: Text.ElideMiddle
+                        }
                     }
-                    Text {
-                        width: Math.max(60, infoBlock.width - 90)
-                        height: theme.smallFont + 4
-                        verticalAlignment: Text.AlignVCenter
-                        text: String(infoBlock.info[modelData] || "")
-                        color: theme.text
-                        font.family: modelData === "homepage" ? theme.fontFamily : theme.monoFamily
-                        font.pixelSize: theme.tinyFont
-                        elide: Text.ElideMiddle
+                }
+                Row {
+                    width: parent.width
+                    spacing: 6
+                    ThemedButton {
+                        text: root.t("更多…", "More…")
+                        onClicked: root.moreRequested(root.packageIndex)
+                    }
+                    ThemedButton {
+                        visible: String(infoBlock.info["homepage"] || "").length > 0
+                        text: root.t("打开官网", "Open homepage")
+                        onClicked: controller.openUrl(String(infoBlock.info["homepage"]))
                     }
                 }
             }

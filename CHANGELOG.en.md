@@ -4,9 +4,17 @@
 
 All notable changes are recorded here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [0.4.0] - 2026-11-14
 
 ### Added
+
+- **WinGet package information window**: the details pane now summarizes publisher, author, license, installer and release date; a new More window presents the full `winget show` metadata, tags and release notes in sections, with copy-all and URL actions.
+- **Manager provenance hints**: replace verbose registration text with a glyph and tooltip; show the version-comparison hint only when a target version exists but cannot be compared.
+
+### Fixed
+
+- **Interactive upgrade crashes and uninstaller waits (including Pandoc)**: WinGet mutations preserve interactive installer UI; agreement snapshots belong to each task; the controller owns and safely joins workers to prevent callbacks from touching destroyed objects.
+- **Clipped detail pane**: bind the information card to its parent width and clear detail state when selection resets.
 
 ## [0.3.0] - 2026-11-14
 

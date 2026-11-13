@@ -7,6 +7,7 @@
 import QtQuick
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
+import QtQuick.Window
 
 ApplicationWindow {
     id: window
@@ -822,15 +823,14 @@ ApplicationWindow {
                             if (currentIndex >= 0)
                                 controller.selectRow(currentIndex)
                         }
-
-                        // The model is replaced wholesale on every rebuild (a new
-                        // search, a filter change, a tab switch), and currentIndex
-                        // survives that reset. Without this the details pane kept
-                        // describing a row from the previous list.
-                        onModelChanged: currentIndex = -1
                         Connections {
                             target: packagesModel
-                            function onModelReset() { list.currentIndex = -1 }
+                            function onModelReset() {
+                                // The model clears selection on reset. Mirror that
+                                // in the view; without this the details pane and the
+                                // visible row would disagree about what is selected.
+                                list.currentIndex = packagesModel.selectedRow
+                            }
                         }
                     }
                 }
@@ -843,12 +843,21 @@ ApplicationWindow {
                 color: theme.page
 
                 DetailPane {
+                    id: detailPane
+                    objectName: "detailPane"
                     anchors.fill: parent
                     anchors.margins: 12
                     // The controller owns the selection, so the pane follows it even
                     // when the selection came from a keyboard shortcut or the
                     // harness rather than a click on this ListView.
-                    packageIndex: list.currentIndex >= 0 ? list.currentIndex : controller.selectedRow
+                    packageIndex: packagesModel.selectedRow
+                    onMoreRequested: function(index) {
+                        controller.requestPackageInfo(index)
+                        infoWindow.packageIndex = index
+                        infoWindow.show()
+                        infoWindow.raise()
+                        infoWindow.requestActivate()
+                    }
                 }
                 Rectangle { width: 1; height: parent.height; color: theme.divider }
             }
@@ -907,6 +916,12 @@ ApplicationWindow {
     ReviewDialog {
         id: reviewDialog
         anchors.fill: parent
+    }
+
+    PackageInfoWindow {
+        id: infoWindow
+        objectName: "packageInfoWindow"
+        packageIndex: -1
     }
 
     Popup {

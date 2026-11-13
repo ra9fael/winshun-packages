@@ -171,12 +171,15 @@ Rectangle {
                             // the verdict, and the page says so before the user
                             // agrees to anything.
                             { k: "verify", zh: "结果核对", en: "Verification" },
+                            { k: "interactive", zh: "交互", en: "Interactive" },
                             { k: "metadataAt", zh: "元数据", en: "Metadata" }
                         ]
                         delegate: RowLayout {
                             required property var modelData
                             Layout.fillWidth: true
                             spacing: 8
+                            visible: controller.reviewFacts[modelData.k] !== undefined
+                                     && String(controller.reviewFacts[modelData.k]) !== ""
                             Text {
                                 Layout.preferredWidth: 76
                                 text: root.t(modelData.zh, modelData.en)
