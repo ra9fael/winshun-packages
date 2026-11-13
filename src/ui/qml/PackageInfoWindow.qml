@@ -1,27 +1,27 @@
 // PackageInfoWindow.qml — the full `winget show` record for one package.
 //
-// The details pane has room for a summary; this window is for the whole thing:
-// release notes, publisher contacts, tag list and installer internals. It is a
-// second window rather than a bigger pane because the pane is bounded by the
-// list it sits beside, and a release note needs the width.
+// The details pane has room for a summary; this dialog is for the whole thing:
+// release notes, publisher contacts, tag list and installer internals. It opens as a
+// a full-width modal panel in the owner window rather than a second native window.
+// This keeps the dialog inside the host's QtQuick runtime and avoids a dependency
+// on QtQuick.Window, which is not deployed by some WinShun host installations.
 import QtQuick
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
-import QtQuick.Window
 
-Window {
+Popup {
     id: root
     property int packageIndex: -1
     readonly property bool zh: controller.locale.startsWith("zh")
     function t(zhText, enText) { return zh ? zhText : enText }
 
-    title: t("包信息", "Package metadata")
     width: 720
     height: 640
-    minimumWidth: 480
-    minimumHeight: 360
-    visible: false
-    color: theme.page
+    modal: true
+    focus: true
+    closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+    anchors.centerIn: Overlay.overlay
+    padding: 0
 
     readonly property var info: controller.packageInfo
     readonly property bool busy: controller.packageInfoBusy
@@ -93,9 +93,17 @@ Window {
         return false
     }
 
+    background: Rectangle {
+        color: theme.page
+        border.color: theme.windowEdge
+        border.width: 1
+        radius: theme.cardRadius
+    }
+
     Rectangle {
         anchors.fill: parent
         color: theme.page
+        radius: theme.cardRadius
 
         ColumnLayout {
             anchors.fill: parent
@@ -141,7 +149,7 @@ Window {
                     }
                     ThemedButton {
                         text: root.t("关闭", "Close")
-                        onClicked: root.hide()
+                        onClicked: root.close()
                     }
                 }
                 Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: theme.divider }

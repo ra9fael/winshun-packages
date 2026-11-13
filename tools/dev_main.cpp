@@ -902,12 +902,10 @@ int main(int argc, char** argv)
                                .arg(packagesModel.rowCount()));
             if (options.showInfoWindow) {
                 QTimer::singleShot(250, &app, [&] {
-                    if (auto* window = scene->window->findChild<QQuickWindow*>("packageInfoWindow")) {
-                        window->setProperty("packageIndex", options.focusRow);
-                        window->show();
-                        window->raise();
-                        window->requestActivate();
-                    } else {
+                    if (auto* window = scene->window->findChild<QObject*>("packageInfoWindow")) {
+                            window->setProperty("packageIndex", options.focusRow);
+                            QMetaObject::invokeMethod(window, "open");
+                        } else {
                         std::fprintf(stderr, "show-info-window error: metadata window not found\n");
                     }
                 });

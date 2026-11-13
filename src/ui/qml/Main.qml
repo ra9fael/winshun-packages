@@ -7,7 +7,6 @@
 import QtQuick
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
-import QtQuick.Window
 
 ApplicationWindow {
     id: window
@@ -854,9 +853,7 @@ ApplicationWindow {
                     onMoreRequested: function(index) {
                         controller.requestPackageInfo(index)
                         infoWindow.packageIndex = index
-                        infoWindow.show()
-                        infoWindow.raise()
-                        infoWindow.requestActivate()
+                        infoWindow.open()
                     }
                 }
                 Rectangle { width: 1; height: parent.height; color: theme.divider }

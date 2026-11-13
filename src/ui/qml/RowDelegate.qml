@@ -223,12 +223,12 @@ Item {
             // every row, occupying space that belongs to the version. The details
             // pane still spells it out for anyone who wonders.
             text: (root.provenance === "backend-recorded" || root.provenance === "backend 记录")
-                  ? "\u2713" : "\u25CB"
+                  ? "\uE73E" : "\uE890"
             color: (root.provenance === "backend-recorded" || root.provenance === "backend 记录")
                    ? theme.ok : theme.warn
-            font.family: theme.fontFamily
-            font.pixelSize: theme.smallFont
-            font.weight: Font.DemiBold
+            font.family: "Segoe Fluent Icons"
+            font.pixelSize: theme.smallFont + 2
+            font.weight: Font.Normal
             HoverHandler { id: provenanceHover }
             ToolTip.visible: provenanceHover.hovered
             ToolTip.delay: 400
