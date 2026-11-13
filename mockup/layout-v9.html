@@ -244,6 +244,15 @@
   .spin2 { width:11px; height:11px; border:2px solid var(--controlBorder);
            border-top-color:var(--accentLine); border-radius:50%;
            animation:spin .7s linear infinite; }
+  #packageInfoOverlay { display:none; position:fixed; inset:0; z-index:30; align-items:center; justify-content:center; background:#0007; }
+  #packageInfo { width:min(680px, calc(100vw - 48px)); max-height:82vh; overflow:auto; background:var(--bg); color:var(--text); border:1px solid var(--edge); border-radius:var(--cardR); box-shadow:0 16px 48px #0005; }
+  #packageInfo header { position:sticky; top:0; display:flex; align-items:center; gap:8px; padding:12px 16px; background:var(--layer); border-bottom:1px solid var(--divider); font-weight:600; }
+  #packageInfo header button { margin-left:auto; }
+  #packageInfoBody { padding:12px 16px; }
+  #packageInfoBody h4 { margin:12px 0 6px; color:var(--accentLine); }
+  #packageInfoBody .ir { display:flex; gap:12px; padding:4px 0; border-bottom:1px solid var(--divider); }
+  #packageInfoBody .ik { width:140px; flex:0 0 auto; color:var(--faint); }
+  #packageInfoBody .iv { white-space:pre-wrap; overflow-wrap:anywhere; }
 
   /* ---- 7. 任务页 ---- */
   #tasksPage { display:none; flex:1 1 auto; min-height:0; flex-direction:column; }
@@ -512,6 +521,7 @@
             <button class="copybtn" id="dShowBtn">查询</button>
           </div>
           <div id="dInfoBody"></div>
+          <button class="copybtn" id="dMoreBtn" style="display:none;margin-top:6px">更多信息…</button>
         </div>
         <div id="detailActions"></div>
       </div>
@@ -536,6 +546,14 @@
   <!-- 8. 页脚：只有状态（改动 5） -->
   <div id="footer">
     <span class="status" id="statusLine">就绪</span>
+  </div>
+
+  <!-- Full winget show metadata -->
+  <div id="packageInfoOverlay" role="dialog" aria-modal="true" aria-labelledby="packageInfoTitle">
+    <section id="packageInfo">
+      <header><span id="packageInfoTitle">软件包完整信息</span><button class="copybtn" id="packageInfoCopy">复制全部</button><button class="copybtn" id="packageInfoClose">关闭</button></header>
+      <div id="packageInfoBody"></div>
+    </section>
   </div>
 
   <!-- 右键菜单（改动 6） -->
@@ -1026,55 +1044,29 @@ const SHOW_INFO = {
 
 function renderInfo(r) {
   const bodyEl = $("dInfoBody");
-  // Only winget packages have a `show` output worth a process; an ARP/MSIX
-  // installation record and a Scoop package are explained instead of queried.
-  const canQuery = r.mgr === "winget" && !String(r.id).startsWith("ARP\\")
-                   && !String(r.id).startsWith("MSIX\\");
+  const canQuery = r.mgr === "winget" && !String(r.id).startsWith("ARP\\") && !String(r.id).startsWith("MSIX\\");
   const info = state.info[r.id];
-
-  if (!canQuery) {
-    $("dShowBtn").style.display = "none";
-    bodyEl.innerHTML = `<div class="inote">${
-      r.mgr === "scoop" ? "Scoop 包没有等价的详细信息输出。" : "这是系统安装记录，不是 WinGet 包，无法查询详细信息。"}</div>`;
-    return;
-  }
-
-  if (state.infoBusy === r.id) {
-    $("dShowBtn").style.display = "none";
-    bodyEl.innerHTML = `<div class="ibusy"><div class="spin2"></div>正在读取 winget show ${esc(r.id)}…</div>`;
-    return;
-  }
-
-  if (!info) {
-    $("dShowBtn").style.display = "";
-    $("dShowBtn").textContent = "查询";
-    bodyEl.innerHTML = `<div class="inote">点「查询」读取 publisher、官网、license 与安装器哈希（只读）。</div>`;
-    return;
-  }
-
-  $("dShowBtn").style.display = "";
-  $("dShowBtn").textContent = "重新查询";
-  if (info.note) {
-    bodyEl.innerHTML = `<div class="inote">${esc(info.note)}</div>`;
-    return;
-  }
-  const rows = [
-    ["版本", info.version], ["发布者", info.publisher], ["License", info.license],
-    ["安装器", info.installerType], ["SHA256", info.installerSha256],
-    ["发布日", info.releaseDate]
-  ].filter(([, v]) => v);
-  let html = rows.map(([k, v]) =>
-    `<div class="ir"><span class="ik">${k}</span><span class="iv">${esc(v)}</span></div>`).join("");
-  if (info.homepage) {
-    html += `<div class="ir"><span class="ik">官网</span><span class="iv link" data-url="${esc(info.homepage)}">${esc(info.homepage)}</span></div>`;
-  }
-  bodyEl.innerHTML = html;
-  bodyEl.querySelectorAll(".iv.link").forEach(el => {
-    el.addEventListener("click", () => setStatus(`打开 ${el.dataset.url}`));
-  });
+  if (!canQuery) { $("dShowBtn").style.display="none"; $("dMoreBtn").style.display="none"; bodyEl.innerHTML=`<div class="inote">${r.mgr==="scoop"?"Scoop 包没有等价的详细信息输出。":"这是系统安装记录，不是 WinGet 包，无法查询详细信息。"}</div>`; return; }
+  if (state.infoBusy===r.id) { $("dShowBtn").style.display="none"; $("dMoreBtn").style.display="none"; bodyEl.innerHTML=`<div class="ibusy"><div class="spin2"></div>正在读取 winget show ${esc(r.id)}…</div>`; return; }
+  if (!info) { $("dShowBtn").style.display=""; $("dShowBtn").textContent="查询"; $("dMoreBtn").style.display="none"; bodyEl.innerHTML=`<div class="inote">点「查询」读取完整的软件包信息（只读）。</div>`; return; }
+  $("dShowBtn").style.display=""; $("dShowBtn").textContent="重新查询";
+  if (info.note) { $("dMoreBtn").style.display="none"; bodyEl.innerHTML=`<div class="inote">${esc(info.note)}</div>`; return; }
+  $("dMoreBtn").style.display="";
+  const rows=[["版本",info.version],["Publisher",info.publisher],["Author",info.author],["License",info.license],["Installer Type",info.installerType],["发布日",info.releaseDate]].filter(([,v])=>v);
+  bodyEl.innerHTML=rows.map(([k,v])=>`<div class="ir"><span class="ik">${esc(k)}</span><span class="iv">${esc(v)}</span></div>`).join("");
 }
-
-
+function showPackageInfo() {
+  const r=currentRow(), info=r&&state.info[r.id]; if(!info||info.note||state.infoBusy===r.id)return;
+  const labels=["身份","发布者","许可与隐私","安装器","Tags","Release Notes"];
+  const groups=[[["名称",r.name],["精确 ID",r.id],["版本",info.version],["Moniker",info.moniker]],[["Publisher",info.publisher],["Author",info.author],["Publisher URL",info.publisherUrl],["Support URL",info.publisherSupportUrl],["Homepage",info.homepage],["Release Date",info.releaseDate],["Copyright",info.copyright]],[["License",info.license],["License URL",info.licenseUrl],["Privacy URL",info.privacyUrl]],[["Installer Type",info.installerType],["Locale",info.installerLocale],["Architecture",info.architecture],["Installer URL",info.installerUrl],["SHA256",info.installerSha256]],[["Tags",info.tags?.join(" · ")]],[["Release Notes",info.releaseNotes]]];
+  $("packageInfoTitle").textContent=`${r.name} · 完整信息`;
+  $("packageInfoBody").innerHTML=groups.map((g,i)=>{const a=g.filter(([,v])=>v);return a.length?`<h4>${labels[i]}</h4>`+a.map(([k,v])=>`<div class="ir"><span class="ik">${esc(k)}</span><span class="iv">${esc(v)}</span></div>`).join(""):"";}).join("");
+  $("packageInfoOverlay").style.display="flex";
+}
+$("dMoreBtn").addEventListener("click",showPackageInfo);
+$("packageInfoClose").addEventListener("click",()=>{$("packageInfoOverlay").style.display="none";});
+$("packageInfoOverlay").addEventListener("click",e=>{if(e.target===$("packageInfoOverlay"))$("packageInfoOverlay").style.display="none";});
+$("packageInfoCopy").addEventListener("click",async()=>{try{await navigator.clipboard.writeText($("packageInfoBody").innerText);setStatus("已复制完整软件包信息");}catch{setStatus("剪贴板不可用：请手动选择信息复制");}});
 /* ============================================================
    精确 ID 复制 + winget show 查询
    ============================================================ */
