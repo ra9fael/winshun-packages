@@ -1,0 +1,121 @@
+{
+    "buckets": [
+        {
+            "Name": "main",
+            "Source": "https://github.com/ScoopInstaller/Main",
+            "Updated": {
+                "value": "\/Date(1792824851000)\/",
+                "DisplayHint": 2,
+                "DateTime": "2026年10月24日 14:54:11"
+            },
+            "Manifests": 1700
+        },
+        {
+            "Name": "extras",
+            "Source": "https://github.com/ScoopInstaller/Extras",
+            "Updated": {
+                "value": "\/Date(1792824042000)\/",
+                "DisplayHint": 2,
+                "DateTime": "2026年10月24日 14:40:42"
+            },
+            "Manifests": 2447
+        },
+        {
+            "Name": "versions",
+            "Source": "https://github.com/ScoopInstaller/Versions",
+            "Updated": {
+                "value": "\/Date(1792822620000)\/",
+                "DisplayHint": 2,
+                "DateTime": "2026年10月24日 14:17:00"
+            },
+            "Manifests": 629
+        },
+        {
+            "Name": "nirsoft",
+            "Source": "https://github.com/ScoopInstaller/Nirsoft",
+            "Updated": {
+                "value": "\/Date(1792661506000)\/",
+                "DisplayHint": 2,
+                "DateTime": "2026年10月22日 17:31:46"
+            },
+            "Manifests": 291
+        },
+        {
+            "Name": "sysinternals",
+            "Source": "https://github.com/niheaven/scoop-sysinternals",
+            "Updated": {
+                "value": "\/Date(1792342887000)\/",
+                "DisplayHint": 2,
+                "DateTime": "2026年10月19日 1:01:27"
+            },
+            "Manifests": 76
+        },
+        {
+            "Name": "nerd-fonts",
+            "Source": "https://github.com/matthewjberger/scoop-nerd-fonts",
+            "Updated": {
+                "value": "\/Date(1792781976000)\/",
+                "DisplayHint": 2,
+                "DateTime": "2026年10月24日 2:59:36"
+            },
+            "Manifests": 367
+        },
+        {
+            "Name": "java",
+            "Source": "https://github.com/ScoopInstaller/Java",
+            "Updated": {
+                "value": "\/Date(1792816742000)\/",
+                "DisplayHint": 2,
+                "DateTime": "2026年10月24日 12:39:02"
+            },
+            "Manifests": 338
+        },
+        {
+            "Name": "pamburus",
+            "Source": "https://github.com/pamburus/scoop-bucket.git",
+            "Updated": {
+                "value": "\/Date(1792618010000)\/",
+                "DisplayHint": 2,
+                "DateTime": "2026年10月22日 5:26:50"
+            },
+            "Manifests": 0
+        }
+    ],
+    "apps": [
+        {
+            "Name": "aria2",
+            "Version": "1.37.0-1",
+            "Source": "main",
+            "Updated": "\/Date(1747644182644)\/",
+            "Info": ""
+        },
+        {
+            "Name": "lilex-nf",
+            "Version": "3.5.1",
+            "Source": "nerd-fonts",
+            "Updated": "\/Date(1787474546074)\/",
+            "Info": ""
+        },
+        {
+            "Name": "Monaspace-NF-Mono",
+            "Version": "3.5.1",
+            "Source": "nerd-fonts",
+            "Updated": "\/Date(1787474567791)\/",
+            "Info": ""
+        },
+        {
+            "Name": "scoop-search",
+            "Version": "2.1.0",
+            "Source": "main",
+            "Updated": "\/Date(1792821335805)\/",
+            "Info": ""
+        },
+        {
+            "Name": "smiley-sans",
+            "Version": "2.0.1",
+            "Source": "nerd-fonts",
+            "Updated": "\/Date(1748417161069)\/",
+            "Info": ""
+        }
+    ]
+}

@@ -1,0 +1,13 @@
+# Build outputs
+build/
+dist/
+
+# Compiler intermediates that MSVC leaves in the source tree during ad-hoc
+# probe builds; nothing in the CMake flow produces these.
+*.obj
+packages.exe
+packages_dev.exe
+
+# Python
+__pycache__/
+*.pyc

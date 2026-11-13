@@ -1,0 +1,857 @@
+<!DOCTYPE html>
+<html lang="zh" data-theme="light" data-zoom="100">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Packages · 软件包 — 界面模拟稿</title>
+<style>
+/* Design tokens mirror WinShun's nativeLook contract so the QML build can lift
+   them verbatim. Radii are logical pixels already resolved by the host. */
+:root{
+  --r-card:8px; --r-ctl:4px;
+  --font:"Segoe UI Variable Text","Segoe UI",system-ui,-apple-system,"Microsoft YaHei UI",sans-serif;
+  --mono:"Cascadia Mono","Consolas",ui-monospace,monospace;
+  --row-h:52px;
+}
+html[data-theme="light"]{
+  --background:#f7f7f9; --layer:#fff; --page:#fbfbfc; --window-edge:#e3e3e8; --divider:#ebebef;
+  --text:#1b1b1f; --subtext:#5a5a63; --faint:#8b8b95; --hover:#f0f0f4; --pressed:#e6e6ec;
+  --tag-fill:#eef0f4; --control:#fff; --control-hover:#f4f4f8; --control-border:#d8d8e0;
+  --accent:#a8402c; --accent-fill:#b8482f; --accent-line:#c2553a; --accent-text:#fff;
+  --danger:#b4241c; --danger-fill:#c33427; --warn:#8a5a00; --warn-fill:#a86f00;
+  --ok:#17693a; --sel:#f3ece9;
+  --shadow:0 2px 6px rgba(20,20,30,.08),0 12px 32px rgba(20,20,30,.10);
+}
+html[data-theme="dark"]{
+  --background:#1d1d20; --layer:#26262a; --page:#202024; --window-edge:#3a3a41; --divider:#33333a;
+  --text:#f2f2f5; --subtext:#b2b2bd; --faint:#87878f; --hover:#2e2e34; --pressed:#383840;
+  --tag-fill:#33333b; --control:#2b2b31; --control-hover:#34343b; --control-border:#45454e;
+  --accent:#e08a6f; --accent-fill:#a8402c; --accent-line:#c2553a; --accent-text:#fff;
+  --danger:#f08a80; --danger-fill:#b4332a; --warn:#e3bd6a; --warn-fill:#8a5a00;
+  --ok:#79c79a; --sel:#3a2b27;
+  --shadow:0 2px 8px rgba(0,0,0,.5),0 16px 40px rgba(0,0,0,.45);
+}
+html[data-zoom="150"]{--row-h:60px}
+html[data-zoom="200"]{--row-h:72px}
+*{box-sizing:border-box}
+body{
+  margin:0;padding:24px;background:#6b6b76;font-family:var(--font);
+  display:flex;justify-content:center;align-items:flex-start;min-height:100vh;
+  font-size:13.5px;
+}
+html[data-zoom="150"] body{font-size:15px}
+html[data-zoom="200"] body{font-size:17px}
+.window{
+  width:980px;max-width:100%;height:720px;background:var(--background);color:var(--text);
+  border:1px solid var(--window-edge);border-radius:var(--r-card);box-shadow:var(--shadow);
+  display:flex;flex-direction:column;overflow:hidden;position:relative;
+}
+html[data-zoom="150"] .window{width:1080px;height:790px}
+html[data-zoom="200"] .window{width:1180px;height:860px}
+.titlebar{display:flex;align-items:center;gap:10px;padding:10px 12px 8px;background:var(--layer);border-bottom:1px solid var(--divider)}
+.titlebar h1{font-size:13px;font-weight:600;margin:0;display:flex;align-items:center;gap:7px}
+.titlebar h1 .glyph{width:18px;height:18px;display:grid;place-items:center;background:var(--accent-fill);color:var(--accent-text);border-radius:var(--r-ctl);font-size:11px;font-weight:700}
+.titlebar .spacer{flex:1}
+.titlebar .mode-chip{font-size:11px;color:var(--subtext);background:var(--tag-fill);border-radius:999px;padding:2px 8px;white-space:nowrap}
+button{
+  font:inherit;color:var(--text);background:var(--control);border:1px solid var(--control-border);
+  border-radius:var(--r-ctl);padding:4px 10px;cursor:pointer;font-size:12px;line-height:1.5;
+  transition:background .12s,border-color .12s;
+}
+button:hover:not(:disabled){background:var(--control-hover)}
+button:active:not(:disabled){background:var(--pressed)}
+button:disabled{opacity:.45;cursor:not-allowed}
+button:focus-visible,select:focus-visible,input:focus-visible,[tabindex]:focus-visible,
+.tab:focus-visible,.row:focus-visible,.cb:focus-visible{
+  outline:2px solid var(--accent);outline-offset:1px;
+}
+button.primary{background:var(--accent-fill);border-color:var(--accent-line);color:var(--accent-text);font-weight:600}
+button.primary:hover:not(:disabled){filter:brightness(1.08)}
+button.danger{border-color:var(--danger-fill);color:var(--danger)}
+button.ghost{background:transparent;border-color:transparent}
+button.ghost:hover:not(:disabled){background:var(--hover)}
+select,input[type="text"]{font:inherit;font-size:12px;color:var(--text);background:var(--control);border:1px solid var(--control-border);border-radius:var(--r-ctl);padding:4px 8px}
+.tabs{display:flex;align-items:center;gap:2px;padding:0 10px;background:var(--layer);border-bottom:1px solid var(--divider)}
+.tab{border:none;background:transparent;border-radius:0;padding:8px 12px 9px;font-size:12.5px;color:var(--subtext);border-bottom:2px solid transparent;margin-bottom:-1px;display:flex;align-items:center;gap:6px}
+.tab:hover{background:var(--hover);color:var(--text)}
+.tab[aria-selected="true"]{color:var(--text);font-weight:600;border-bottom-color:var(--accent-line)}
+.tab .badge{font-size:10.5px;font-weight:600;min-width:17px;text-align:center;padding:1px 5px;border-radius:999px;background:var(--accent-fill);color:var(--accent-text)}
+.tab .badge.quiet{background:var(--tag-fill);color:var(--subtext)}
+.filters{display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--layer);border-bottom:1px solid var(--divider)}
+.filters label{font-size:11.5px;color:var(--faint);white-space:nowrap}
+.filters .grow{flex:1}
+.filters input[type="text"]{width:100%}
+.filters .hint-inline{font-size:11px;color:var(--faint);white-space:nowrap}
+.strip{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:5px 12px;font-size:11px;color:var(--faint);background:var(--page);border-bottom:1px solid var(--divider)}
+.strip .dot{width:6px;height:6px;border-radius:50%;display:inline-block;margin-right:4px}
+.dot.ok{background:#2f9e5f}.dot.warn{background:#c8912a}.dot.bad{background:#c33f34}.dot.idle{background:#8a8a95}
+.strip .sep{color:var(--window-edge)}
+.split{flex:1;display:flex;min-height:0}
+.split[hidden],.taskpane[hidden],.overlay[hidden],.rows[hidden],.statepanel[hidden]{display:none}
+.listpane{flex:1;min-width:0;display:flex;flex-direction:column;border-right:1px solid var(--divider)}
+.listhead{display:grid;grid-template-columns:26px 1fr 150px;gap:0 8px;padding:5px 12px;font-size:10.5px;letter-spacing:.04em;text-transform:uppercase;color:var(--faint);border-bottom:1px solid var(--divider);background:var(--page)}
+.rows{overflow-y:auto;flex:1;outline:none}
+.rows::-webkit-scrollbar{width:10px}
+.rows::-webkit-scrollbar-thumb{background:var(--control-border);border-radius:5px}
+.row{display:grid;grid-template-columns:26px 1fr;gap:0 8px;padding:7px 12px;min-height:var(--row-h);border-bottom:1px solid var(--divider);align-items:start;outline:none}
+.row:hover{background:var(--hover)}
+.row.sel{background:var(--sel)}
+.row.checked{background:var(--sel);box-shadow:inset 2px 0 0 var(--accent-line)}
+.row .cb{margin-top:2px;width:14px;height:14px;border:1px solid var(--control-border);border-radius:3px;background:var(--control);display:grid;place-items:center;font-size:10px;color:var(--accent-text);cursor:pointer;flex:none}
+.row .cb[aria-checked="true"]{background:var(--accent-fill);border-color:var(--accent-line)}
+.row .cb.disabled{opacity:.35;cursor:not-allowed}
+.row .main{min-width:0}
+.row .line1{display:flex;align-items:baseline;gap:8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row .name{font-size:12.5px;font-weight:600}
+.row .exactid{font-family:var(--mono);font-size:11px;color:var(--subtext);overflow:hidden;text-overflow:ellipsis}
+.row .line2{font-size:11px;color:var(--subtext);display:flex;flex-wrap:wrap;gap:4px 8px;margin-top:2px}
+.row .arrow{font-family:var(--mono)}
+.row .arrow .to{color:var(--ok)}
+.row mark{background:rgba(168,64,44,.24);color:inherit;border-radius:2px;padding:0 1px}
+.tag{font-size:10px;padding:1px 6px;border-radius:999px;background:var(--tag-fill);color:var(--subtext);white-space:nowrap;border:1px solid transparent}
+.tag.mgr-scoop{color:#2b6f8f;border-color:currentColor}
+.tag.mgr-winget{color:#2f6b3a;border-color:currentColor}
+html[data-theme="dark"] .tag.mgr-scoop{color:#7fc4e3}
+html[data-theme="dark"] .tag.mgr-winget{color:#86c99a}
+.tag.warn{color:var(--warn)}.tag.bad{color:var(--danger)}.tag.ok{color:var(--ok)}.tag.dupe{color:var(--warn)}
+.tag.warn,.tag.bad,.tag.ok,.tag.dupe{background:transparent;border-color:currentColor}
+.detailpane{width:330px;flex:none;padding:12px;overflow-y:auto;background:var(--page);font-size:11.5px}
+.detailpane h2{font-size:12.5px;margin:0 0 2px;font-weight:600;display:flex;align-items:center;gap:6px}
+.detailpane .sub{color:var(--faint);font-size:10.5px;margin-bottom:10px}
+.kv{display:grid;grid-template-columns:84px 1fr;gap:3px 8px;margin:0 0 10px}
+.kv dt{color:var(--faint);font-size:10.5px}
+.kv dd{margin:0;word-break:break-word}
+.kv dd.mono{font-family:var(--mono);font-size:10.5px}
+.detailpane h3{font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--faint);margin:12px 0 5px;padding-bottom:3px;border-bottom:1px solid var(--divider)}
+.note{border-left:2px solid var(--window-edge);padding:4px 0 4px 8px;color:var(--subtext);font-size:11px;margin:6px 0}
+.note.warn{border-left-color:var(--warn-fill);color:var(--warn)}
+.note.bad{border-left-color:var(--danger-fill);color:var(--danger)}
+.note.ok{border-left-color:var(--ok);color:var(--ok)}
+.actions{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.actions button{flex:1 1 auto}
+.reason{font-size:10.5px;color:var(--faint);margin-top:3px}
+.detailempty{color:var(--faint);font-size:11.5px;line-height:1.7;padding-top:20px}
+.detailempty .big{font-size:26px;opacity:.35;display:block;margin-bottom:8px}
+.footer{display:flex;align-items:center;gap:10px;padding:7px 12px;background:var(--layer);border-top:1px solid var(--divider);font-size:11px;color:var(--subtext)}
+.footer .spacer{flex:1}
+.footer .count{font-variant-numeric:tabular-nums}
+.footer .sep{color:var(--window-edge)}
+.taskpane{flex:1;display:flex;flex-direction:column;min-height:0}
+.taskhead,.taskrow{display:grid;grid-template-columns:30px 74px 1fr 96px 150px;gap:10px;padding:6px 12px;align-items:center}
+.taskhead{font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--faint);border-bottom:1px solid var(--divider);background:var(--page)}
+.taskrow{border-bottom:1px solid var(--divider);font-size:11.5px;align-items:start;padding-top:9px;padding-bottom:9px}
+.taskrow:hover{background:var(--hover)}
+.taskrow .idx{color:var(--faint);font-variant-numeric:tabular-nums}
+.taskrow .target{min-width:0}
+.taskrow .target .t1{font-weight:600}
+.taskrow .target .t2{font-family:var(--mono);font-size:10.5px;color:var(--subtext)}
+.taskrow .stage{font-size:10.5px;color:var(--faint);margin-top:3px}
+.taskrow .rowactions{display:flex;gap:5px;flex-wrap:wrap;margin-top:6px}
+.taskrow .rowactions button{padding:2px 7px;font-size:11px}
+.prog{height:3px;background:var(--tag-fill);border-radius:2px;overflow:hidden;margin-top:5px;width:90px}
+.prog>i{display:block;height:100%;background:var(--accent-line)}
+.prog.indet>i{width:35%;animation:slide 1.4s ease-in-out infinite}
+@keyframes slide{0%{margin-left:-35%}100%{margin-left:100%}}
+@media (prefers-reduced-motion:reduce){.prog.indet>i{animation:none;width:100%;opacity:.5;margin-left:0}}
+.statepanel{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:30px;gap:6px}
+.statepanel .icon{font-size:30px;opacity:.5}
+.statepanel h3{margin:4px 0 0;font-size:13px;font-weight:600}
+.statepanel p{margin:0;font-size:11.5px;color:var(--subtext);max-width:44ch;line-height:1.65}
+.statepanel .acts{display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;justify-content:center}
+.statepanel .why{margin-top:10px;font-family:var(--mono);font-size:10px;color:var(--faint);background:var(--tag-fill);border-radius:var(--r-ctl);padding:6px 9px;text-align:left;max-width:52ch;white-space:pre-wrap}
+.overlay{position:absolute;inset:0;background:rgba(10,10,14,.55);display:flex;align-items:center;justify-content:center;padding:22px;z-index:20}
+.dialog{background:var(--layer);border:1px solid var(--window-edge);border-radius:var(--r-card);box-shadow:var(--shadow);width:560px;max-width:100%;max-height:100%;display:flex;flex-direction:column;overflow:hidden}
+.dialog header{padding:10px 14px;border-bottom:1px solid var(--divider);font-size:12.5px;font-weight:600;display:flex;align-items:center;gap:8px}
+.dialog header .op{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;background:var(--accent-fill);color:var(--accent-text);border-radius:3px;padding:1px 5px}
+.dialog .body{padding:12px 14px;overflow-y:auto;font-size:11.5px}
+.dialog .body .kv{grid-template-columns:96px 1fr}
+.dialog footer{padding:9px 14px;border-top:1px solid var(--divider);display:flex;align-items:center;gap:8px;background:var(--page)}
+.dialog footer .spacer{flex:1}
+.consent{display:flex;align-items:flex-start;gap:7px;border:1px solid var(--control-border);border-radius:var(--r-ctl);padding:7px 9px;margin:6px 0;background:var(--control)}
+.consent input{margin-top:2px}
+.consent .ctext{flex:1;font-size:11px}
+.consent .ctext b{display:block;font-size:11.5px;margin-bottom:1px}
+.consent .ctext span{color:var(--faint)}
+.consent.missing{border-color:var(--warn-fill)}
+.steps{display:flex;gap:4px;margin:0 0 10px;flex-wrap:wrap}
+.step{font-size:10px;padding:2px 7px;border-radius:999px;background:var(--tag-fill);color:var(--faint)}
+.step.done{background:rgba(47,158,95,.2);color:var(--ok)}
+.step.active{background:var(--accent-fill);color:var(--accent-text);font-weight:600}
+.step.blocked{background:rgba(195,63,52,.2);color:var(--danger)}
+.demo{max-width:980px;margin:0 auto 12px;background:#2b2b31;color:#d8d8de;border-radius:var(--r-card);padding:10px 12px;font-size:11.5px;display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center}
+.demo strong{color:#fff;font-weight:600}
+.demo label{display:flex;align-items:center;gap:5px}
+.demo select,.demo button{background:#3a3a42;color:#e8e8ec;border-color:#4a4a54;font-size:11.5px;padding:3px 7px}
+.demo .note{opacity:.65}
+.demo-wrap{max-width:980px;margin:0 auto}
+.footnote{max-width:980px;margin:12px auto 0;color:#c9c9d1;font-size:11px;line-height:1.7}
+</style>
+</head>
+<body>
+<div class="demo-wrap">
+  <div class="demo">
+    <strong>模拟稿</strong>
+    <label>语言 <select id="demo-lang"><option value="zh">中文</option><option value="en">English</option></select></label>
+    <label>主题 <select id="demo-theme"><option value="light">浅色</option><option value="dark">深色</option></select></label>
+    <label>缩放 <select id="demo-zoom"><option value="100">100%</option><option value="150">150%</option><option value="200">200%</option></select></label>
+    <label>状态演示 <select id="demo-state">
+      <option value="">— 正常数据 —</option>
+      <option value="loading">初次加载 / 刷新中</option>
+      <option value="empty">真正空列表</option>
+      <option value="backend-missing">backend 缺失</option>
+      <option value="unsupported">unsupported（版本/语言不匹配）</option>
+      <option value="offline">离线 / stale</option>
+      <option value="agreement">协议未同意</option>
+      <option value="conflict">锁冲突 / 外部变更</option>
+      <option value="denied">权限 / UAC 拒绝</option>
+      <option value="partial">部分失败</option>
+    </select></label>
+    <span class="note">键盘：Tab 走焦点 · ↑↓ 移动 · Enter 开详情 · Space 勾选</span>
+  </div>
+
+  <div class="window" role="application" aria-label="Packages · 软件包">
+    <div class="titlebar">
+      <h1><span class="glyph">P</span><span data-i18n="title">软件包</span></h1>
+      <span class="mode-chip" data-i18n="modeChip">普通权限 · 未提权</span>
+      <span class="spacer"></span>
+      <button id="btn-refresh" data-i18n="refresh">刷新</button>
+      <button id="btn-settings" data-i18n="settings">设置</button>
+    </div>
+
+    <nav class="tabs" role="tablist" id="tabs">
+      <button class="tab" role="tab" aria-selected="true" data-tab="installed">
+        <span data-i18n="tabInstalled">已安装</span><span class="badge quiet" id="count-installed">0</span></button>
+      <button class="tab" role="tab" aria-selected="false" data-tab="discover">
+        <span data-i18n="tabDiscover">发现</span></button>
+      <button class="tab" role="tab" aria-selected="false" data-tab="updates">
+        <span data-i18n="tabUpdates">更新</span><span class="badge quiet" id="count-updates">0</span></button>
+      <button class="tab" role="tab" aria-selected="false" data-tab="tasks">
+        <span data-i18n="tabTasks">任务</span><span class="badge" id="count-tasks">5</span></button>
+    </nav>
+
+    <div class="filters">
+      <label for="f-backend" data-i18n="backendLabel">管理器</label>
+      <select id="f-backend">
+        <option value="all" data-i18n="allBackends">全部</option>
+        <option value="scoop">Scoop</option>
+        <option value="winget">WinGet</option>
+      </select>
+      <div class="grow"><input type="text" id="f-search" autocomplete="off"
+        data-i18n-ph="searchPh" placeholder="搜索包名或精确 ID（只查询，不安装）"></div>
+      <span class="hint-inline" data-i18n="searchHint">Enter 查看详情</span>
+    </div>
+
+    <div class="strip" id="strip">
+      <span><span class="dot ok"></span><span data-i18n="scanAt">扫描时间</span> <span id="scan-time" style="font-family:var(--mono)">10:42:07</span></span>
+      <span class="sep">·</span>
+      <span><span class="dot warn"></span><span data-i18n="metaStale">元数据过期</span> (2h)</span>
+      <span class="sep">·</span>
+      <span><span class="dot ok"></span>Scoop 0.5.3</span>
+      <span class="sep">·</span>
+      <span><span class="dot ok"></span>WinGet v1.9.25200</span>
+      <span class="sep">·</span>
+      <span><span class="dot idle"></span><span data-i18n="readOnly">只读查询完成</span></span>
+    </div>
+
+    <div class="split" id="pane-list">
+      <section class="listpane">
+        <div class="listhead">
+          <span></span>
+          <span data-i18n="colName">名称 / 精确 ID</span>
+          <span data-i18n="colProv">归属证据</span>
+        </div>
+        <div class="rows" id="rows" tabindex="0" role="listbox" aria-label="package list"></div>
+        <div class="statepanel" id="state" hidden></div>
+      </section>
+      <aside class="detailpane" id="details" aria-live="polite"></aside>
+    </div>
+
+    <div class="taskpane" id="pane-tasks" hidden>
+      <div class="taskhead">
+        <span>#</span><span data-i18n="colMgr">管理器</span>
+        <span data-i18n="colTarget">精确目标 / 作用域</span>
+        <span data-i18n="colAction">操作</span><span data-i18n="colState">状态</span>
+      </div>
+      <div class="rows" id="taskrows" style="overflow-y:auto"></div>
+      <div class="footer">
+        <span data-i18n="logLabel">日志</span>
+        <span style="font-family:var(--mono);font-size:10.5px;color:var(--faint)">10:43:12 acquire · 10:43:19 uninstall · 10:43:31 install failed (exit 1603)</span>
+        <span class="spacer"></span>
+        <button data-i18n="previewExport">预览导出</button>
+        <button class="danger" data-i18n="clearLogs">清除…</button>
+      </div>
+    </div>
+
+    <div class="footer">
+      <span id="foot-status" data-i18n="footStatus">只读查询完成</span>
+      <span class="sep">·</span>
+      <span class="count"><span data-i18n="selectedLabel">已选</span> <b id="foot-count">0</b></span>
+      <span class="spacer"></span>
+      <span style="color:var(--faint);font-size:10.5px" id="foot-focus"></span>
+      <button class="primary" id="btn-review" disabled data-i18n="reviewSelected">审阅所选操作…</button>
+    </div>
+
+    <div class="overlay" id="review" hidden>
+      <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="review-title">
+        <header><span class="op" id="review-op">INSTALL</span><span id="review-title" data-i18n="reviewTitle">审阅操作</span></header>
+        <div class="body">
+          <div class="steps" id="review-steps"></div>
+          <dl class="kv" id="review-kv"></dl>
+          <div id="review-notes"></div>
+          <div id="review-consent"></div>
+        </div>
+        <footer>
+          <span style="font-size:10.5px;color:var(--faint)" id="review-gate"></span>
+          <span class="spacer"></span>
+          <button id="review-cancel" data-i18n="cancel">取消</button>
+          <button class="primary" id="review-confirm" data-i18n="confirmQueue">确认并加入队列</button>
+        </footer>
+      </div>
+    </div>
+  </div>
+
+  <p class="footnote">
+    本页是需求线框的可交互版本，不是实现证据，也不是截图。<br>
+    This page is an interactive rendition of the requirement wireframes. It is not implementation evidence and not a screenshot.
+  </p>
+</div>
+
+<script>
+"use strict";
+
+/* ---------------------------------------------------------------- i18n --- */
+const T = {
+  title:{zh:"软件包",en:"Packages"},
+  modeChip:{zh:"普通权限 · 未提权",en:"Standard rights · not elevated"},
+  refresh:{zh:"刷新",en:"Refresh"},
+  settings:{zh:"设置",en:"Settings"},
+  tabInstalled:{zh:"已安装",en:"Installed"},
+  tabDiscover:{zh:"发现",en:"Discover"},
+  tabUpdates:{zh:"更新",en:"Updates"},
+  tabTasks:{zh:"任务",en:"Tasks"},
+  backendLabel:{zh:"管理器",en:"Backend"},
+  allBackends:{zh:"全部",en:"All"},
+  searchPh:{zh:"搜索包名或精确 ID（只查询，不安装）",en:"Search name or exact ID (query only, never installs)"},
+  searchHint:{zh:"Enter 查看详情",en:"Enter opens details"},
+  scanAt:{zh:"扫描时间",en:"Scan"},
+  metaStale:{zh:"元数据过期",en:"Metadata stale"},
+  readOnly:{zh:"只读查询完成",en:"Read-only query complete"},
+  colName:{zh:"名称 / 精确 ID",en:"Name / exact ID"},
+  colProv:{zh:"归属证据",en:"Provenance"},
+  colMgr:{zh:"管理器",en:"Manager"},
+  colTarget:{zh:"精确目标 / 作用域",en:"Exact target / scope"},
+  colAction:{zh:"操作",en:"Action"},
+  colState:{zh:"状态",en:"State"},
+  logLabel:{zh:"日志",en:"Log"},
+  previewExport:{zh:"预览导出",en:"Preview export"},
+  clearLogs:{zh:"清除…",en:"Clear…"},
+  footStatus:{zh:"只读查询完成",en:"Read-only query complete"},
+  selectedLabel:{zh:"已选",en:"Selected"},
+  reviewSelected:{zh:"审阅所选操作…",en:"Review selected…"},
+  reviewTitle:{zh:"审阅操作",en:"Review action"},
+  cancel:{zh:"取消",en:"Cancel"},
+  confirmQueue:{zh:"确认并加入队列",en:"Confirm and queue"},
+  provenance:{zh:"归属",en:"Provenance"},
+  scope:{zh:"作用域",en:"Scope"},
+  source:{zh:"来源",en:"Source"},
+  manager:{zh:"管理器",en:"Manager"},
+  exactId:{zh:"精确 ID",en:"Exact ID"},
+  arch:{zh:"架构",en:"Architecture"},
+  policy:{zh:"策略",en:"Policy"},
+  agreements:{zh:"协议",en:"Agreements"},
+  metadataAt:{zh:"元数据",en:"Metadata"},
+  dependencies:{zh:"依赖",en:"Dependencies"},
+  material:{zh:"材料",en:"Material"},
+  restrictions:{zh:"能力限制",en:"Restrictions"},
+  installedTo:{zh:"已装 → 可用",en:"Installed → Available"},
+  detailsTitle:{zh:"详情",en:"Details"},
+  noSelection:{zh:"从左侧选择一项，查看完整身份、来源证据、依赖与能力限制。查询不会安装任何东西。",
+               en:"Pick a row to see its full identity, source evidence, dependencies and capability limits. Querying never installs anything."},
+  observed:{zh:"仅枚举",en:"observed"},
+  matched:{zh:"目录匹配",en:"matched"},
+  recorded:{zh:"backend 记录",en:"backend-recorded"},
+  unknown:{zh:"未知",en:"unknown"},
+  unknownVersion:{zh:"版本未知",en:"version unknown"},
+  hold:{zh:"已 hold",en:"held"},
+  pinned:{zh:"已 pin",en:"pinned"},
+  dupe:{zh:"疑似与另一管理器同软件；只提示，不自动互卸",
+        en:"Possible duplicate in the other manager — a hint only, nothing is removed automatically"},
+  install:{zh:"安装",en:"Install"},
+  uninstall:{zh:"卸载",en:"Uninstall"},
+  reinstall:{zh:"重装",en:"Reinstall"},
+  upgrade:{zh:"升级",en:"Upgrade"},
+  notAtomic:{zh:"非原子：先显式卸载，再安装。两者之间失败会留下未安装状态。",
+             en:"Not atomic: explicit uninstall, then install. A failure between them leaves the package removed."},
+  riskData:{zh:"卸载默认不 purge，但也不保证保留数据；安装器可能写入注册表、环境变量与服务。",
+            en:"Uninstall does not purge by default and does not guarantee data is kept; installers may write the registry, environment and services."},
+  srcAgreement:{zh:"源协议（source agreement）",en:"Source agreement"},
+  instAgreement:{zh:"安装器协议（installer agreement）",en:"Installer agreement"},
+  srcAgreementHint:{zh:"只对当前源生效；拒绝则阻塞该源请求。不会记作对所有源同意。",
+                    en:"Applies to this source only; declining blocks requests for it. Never recorded as consent for all sources."},
+  instAgreementHint:{zh:"由安装器自己呈现；拒绝则不执行安装。与源协议分开同意。",
+                     en:"Presented by the installer itself; declining means no install. Agreed separately from the source agreement."},
+  planRefreshed:{zh:"计划刷新于",en:"Plan refreshed"},
+  method:{zh:"方式",en:"Method"},
+  scopeUac:{zh:"作用域 / UAC",en:"Scope / UAC"},
+  blocked:{zh:"阻塞",en:"BLOCKED"},
+  view:{zh:"查看",en:"View"},
+  needPreflight:{zh:"预检未完成 → 确认按钮保持禁用",en:"Preflight incomplete → confirm stays disabled"},
+  readyToQueue:{zh:"预检通过，协议已逐项明确勾选",en:"Preflight passed; agreements explicitly checked one by one"},
+  actionsTitle:{zh:"操作",en:"Actions"},
+  queueLane:{zh:"已加入队列；同一 manager 串行，等待 lane",en:"Queued; serial per manager, waiting for its lane"},
+  whyDis:{zh:"原因",en:"Why"},
+  focusOrder:{zh:"焦点顺序：导航 → 管理器 → 搜索 → 列表 → 详情动作 → 状态栏",
+              en:"Focus order: navigation → backend → search → list → detail actions → footer"}
+};
+let LANG = "zh";
+const t = k => (T[k] ? T[k][LANG] : k);
+
+/* ----------------------------------------------------------- fake data --- */
+const PACKAGES = [
+  { key:"winget|winget|BurntSushi.ripgrep.MSVC|user", name:"ripgrep",
+    id:"BurntSushi.ripgrep.MSVC", manager:"winget", source:"winget", scope:"user", arch:"x64",
+    installed:"14.1.0", available:"14.1.2", provenance:"recorded", hold:null, agreements:[],
+    meta:"2026-11-10 08:40", deps:"none", material:"index signature verified",
+    limits:"none for this scope", dup:null, canInstall:true, canUninstall:true, canUpgrade:true },
+  { key:"scoop|main|ripgrep|user", name:"ripgrep",
+    id:"ripgrep", manager:"scoop", source:"main", scope:"user", arch:"x64",
+    installed:"14.1.0", available:"14.1.0", provenance:"recorded", hold:null, agreements:[],
+    meta:"2026-11-10 08:41", deps:"none", material:"bucket main, manifest present",
+    limits:"none", dup:"win", canInstall:true, canUninstall:true, canUpgrade:false },
+  { key:"winget|msstore|9NBLGGH4NNS1|machine", name:"Microsoft Terminal",
+    id:"9NBLGGH4NNS1", manager:"winget", source:"msstore", scope:"machine", arch:"x64",
+    installed:"1.21.2911", available:"1.22.10352", provenance:"observed", hold:null,
+    agreements:["source"], meta:"2026-11-10 08:40", deps:"VCLibs, UI.Xaml",
+    material:"store delivery, not verifiable locally",
+    limits:"machine scope needs an elevated installer path — unavailable to this plugin",
+    dup:null, canInstall:false, canUninstall:false, canUpgrade:false },
+  { key:"scoop|extras|vscode|user", name:"Visual Studio Code",
+    id:"vscode", manager:"scoop", source:"extras", scope:"user", arch:"x64",
+    installed:"1.94.2", available:"1.95.1", provenance:"recorded", hold:"pinned @1.94.2",
+    agreements:[], meta:"2026-11-10 08:38", deps:"none",
+    material:"bucket extras, version pinned",
+    limits:"pinned — upgrade needs an explicit policy review",
+    dup:null, canInstall:true, canUninstall:true, canUpgrade:false },
+  { key:"winget|winget|7zip.7zip|machine", name:"7-Zip",
+    id:"7zip.7zip", manager:"winget", source:"winget", scope:"machine", arch:"x64",
+    installed:"24.08", available:"unknown", provenance:"observed", hold:null, agreements:["source"],
+    meta:"2026-11-10 08:40", deps:"none", material:"unknown — installer not yet located",
+    limits:"observed only: no install record matched; uninstall blocked until the instance is uniquely located",
+    dup:null, canInstall:false, canUninstall:false, canUpgrade:false },
+  { key:"scoop|main|git|user", name:"Git",
+    id:"git", manager:"scoop", source:"main", scope:"user", arch:"x64",
+    installed:"2.47.0", available:"2.47.1", provenance:"recorded", hold:null, agreements:[],
+    meta:"2026-11-10 08:41", deps:"none", material:"bucket main", limits:"none",
+    dup:null, canInstall:true, canUninstall:true, canUpgrade:true },
+  { key:"winget|winget|Microsoft.PowerToys|user", name:"PowerToys",
+    id:"Microsoft.PowerToys", manager:"winget", source:"winget", scope:"user", arch:"x64",
+    installed:"0.86.0", available:"0.87.1", provenance:"recorded", hold:null, agreements:["source"],
+    meta:"2026-11-10 08:40", deps:"VC++ 2015-2022 redistributable",
+    material:"from source, 250 MB", limits:"installer registers a service and a toast helper",
+    dup:null, canInstall:true, canUninstall:true, canUpgrade:true },
+  { key:"scoop|main|nodejs-lts|user", name:"Node.js LTS",
+    id:"nodejs-lts", manager:"scoop", source:"main", scope:"user", arch:"x64",
+    installed:"22.9.0", available:"22.11.0", provenance:"matched", hold:null, agreements:[],
+    meta:"2026-11-10 08:41", deps:"none", material:"bucket main",
+    limits:"matched by directory layout only — the manager has no install record",
+    dup:null, canInstall:true, canUninstall:false, canUpgrade:false },
+  { key:"winget|winget|jqlang.jq|user", name:"jq",
+    id:"jqlang.jq", manager:"winget", source:"winget", scope:"user", arch:"x64",
+    installed:null, available:"1.7.1", provenance:null, hold:null, agreements:[],
+    meta:"2026-11-10 08:40", deps:"none", material:"from source, index signature verified",
+    limits:"none", dup:null, canInstall:true, canUninstall:false, canUpgrade:false }
+];
+
+/* ------------------------------------------------------------ rendering --- */
+const $ = id => document.getElementById(id);
+let tab = "installed", backend = "all", query = "", selectedKey = null,
+    checked = new Set(), demoState = "", reviewItem = null,
+    reviewConsents = { source:false, installer:false };
+
+const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g,
+  c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[c]));
+const hi = (text, q) => {
+  if (!q) return esc(text);
+  const i = text.toLowerCase().indexOf(q.toLowerCase());
+  if (i < 0) return esc(text);
+  return esc(text.slice(0, i)) + "<mark>" + esc(text.slice(i, i + q.length)) + "</mark>" +
+         esc(text.slice(i + q.length));
+};
+const provLabel = p => (p ? t(p) : t("unknown"));
+
+function visiblePackages() {
+  let list = PACKAGES.slice();
+  if (tab === "installed") list = list.filter(p => p.installed);
+  if (tab === "updates") list = list.filter(p =>
+    p.installed && p.available && p.available !== "unknown" && p.available !== p.installed);
+  if (backend !== "all") list = list.filter(p => p.manager === backend);
+  if (query) {
+    const q = query.toLowerCase();
+    list = list.filter(p => p.name.toLowerCase().includes(q) || p.id.toLowerCase().includes(q));
+  }
+  return list;
+}
+
+function rowHtml(p) {
+  const isChecked = checked.has(p.key), isSel = selectedKey === p.key;
+  const upgradable = p.installed && p.available && p.available !== p.installed && p.available !== "unknown";
+  const arrow = p.installed
+    ? `<span class="arrow">${esc(p.installed)} → <span class="${upgradable ? "to" : ""}">${esc(p.available || "—")}</span></span>`
+    : `<span class="arrow" style="color:var(--faint)">— → ${esc(p.available || "—")}</span>`;
+  const tags = [
+    `<span class="tag mgr-${p.manager}">${p.manager === "scoop" ? "Scoop" : "WinGet"}</span>`,
+    `<span>${esc(p.source)}</span>`, `<span>${esc(p.scope)}</span>`, arrow,
+    `<span class="tag ${p.provenance === "recorded" ? "ok" : ""}">${provLabel(p.provenance)}</span>`
+  ];
+  if (p.hold) tags.push(`<span class="tag warn">${esc(p.hold.startsWith("pinned") ? t("pinned") : t("hold"))}</span>`);
+  if (p.available === "unknown") tags.push(`<span class="tag warn">${t("unknownVersion")}</span>`);
+  if (p.dup) tags.push(`<span class="tag dupe">${LANG === "zh" ? "疑似重复" : "possible duplicate"}</span>`);
+
+  return `<div class="row ${isSel ? "sel" : ""} ${isChecked ? "checked" : ""}" role="option"
+      aria-selected="${isSel}" data-key="${esc(p.key)}" tabindex="-1">
+    <div class="cb ${(p.canInstall || p.canUninstall || p.canUpgrade) ? "" : "disabled"}"
+         role="checkbox" aria-checked="${isChecked}" tabindex="0"
+         aria-label="${esc(p.name)}" data-check="${esc(p.key)}">${isChecked ? "✓" : ""}</div>
+    <div class="main">
+      <div class="line1"><span class="name">${hi(p.name, query)}</span><span class="exactid">${hi(p.id, query)}</span></div>
+      <div class="line2">${tags.join("")}</div>
+    </div>
+  </div>`;
+}
+
+function renderList() {
+  const state = $("state"), rows = $("rows");
+  $("count-installed").textContent = PACKAGES.filter(p => p.installed).length;
+  $("count-updates").textContent = PACKAGES.filter(p =>
+    p.installed && p.available && p.available !== "unknown" && p.available !== p.installed).length;
+  if (demoState) {
+    rows.hidden = true; rows.innerHTML = ""; state.hidden = false; renderState(demoState);
+    checkFooter(); return;
+  }
+  rows.hidden = false; state.hidden = true;
+  const list = visiblePackages();
+  rows.innerHTML = list.length ? list.map(rowHtml).join("")
+    : `<div style="padding:26px;text-align:center;color:var(--faint);font-size:11.5px">
+         ${tab === "updates"
+           ? (LANG === "zh"
+               ? "没有可用更新。hold / pin 与未知版本项不会出现在这里。"
+               : "No updates available. Held, pinned and unknown-version items are not listed here.")
+           : (LANG === "zh"
+               ? "该筛选条件下没有结果。这是成功查询的空结果，不是失败。"
+               : "No results for this filter. This is a successful empty query, not an error.")}
+       </div>`;
+  checkFooter();
+}
+
+const STATES = {
+  loading: { icon:"◌",
+    zh:["正在查询", "Scoop 读取已安装清单；WinGet 执行 winget list（本地，不联网）。列表保留上一次带时间戳的结果，不会被清成空态。", ["取消查询"]],
+    en:["Querying", "Scoop reads its installed manifest; WinGet runs winget list (local, offline). The previous timestamped list stays visible instead of being blanked.", ["Cancel query"]],
+    why:"backend=scoop,winget\nquery generation=7\nelapsed=1.9s\ncancel drops late results" },
+  empty: { icon:"▭",
+    zh:["没有匹配的包", "查询成功，只是没有结果。范围：已安装 · 全部管理器 · 无搜索词。", ["清除筛选","切换管理器"]],
+    en:["No matching packages", "The query succeeded and returned nothing. Scope: Installed · all backends · no search term.", ["Clear filters","Switch backend"]],
+    why:"exit=0\nitems=0\nnot an error" },
+  "backend-missing": { icon:"⚠",
+    zh:["未找到 WinGet", "另一个 backend（Scoop 0.5.3）继续可用。本插件不会下载或安装包管理器，也不会自动安装 PowerShell 模块。", ["查看手工准备说明","只使用 Scoop"]],
+    en:["WinGet not found", "The other backend (Scoop 0.5.3) keeps working. This plugin never downloads or installs a package manager, and never installs PowerShell modules.", ["How to prepare it manually","Use Scoop only"]],
+    why:"winget.exe → WindowsApps alias\nreal path absent\nstate=missing\nscoop=available" },
+  unsupported: { icon:"⊘",
+    zh:["不支持的输出格式", "该 WinGet 版本的输出列与所有 fixture 都不匹配。不猜列、不生成可执行目标，只保留另一个 backend。", ["查看诊断","复制版本信息"]],
+    en:["Unsupported output", "No fixture matches this WinGet version/locale. Columns are never guessed and no actionable target is produced; the other backend is kept.", ["View diagnostics","Copy version info"]],
+    why:"winget=1.6.x\nlocale=de-DE\nheaders signature: no fixture\nstate=unsupported" },
+  offline: { icon:"☁",
+    zh:["离线 / 元数据过期", "缓存仍可只读查看，已标 stale（2 小时前）。重试需要网络；源协议不会被自动同意。", ["重试","继续查看缓存"]],
+    en:["Offline / stale metadata", "The cache stays readable and is marked stale (2 h old). Retrying needs the network; source agreements are never accepted automatically.", ["Retry","Keep viewing cache"]],
+    why:"last success=08:41\nstale=true\nagreement accepted=false" },
+  agreement: { icon:"§",
+    zh:["需要同意源协议", "该源的搜索被阻塞。接受只对该源生效，不会记作对所有协议同意；拒绝后仍显示受限原因。", ["查看条款","接受该源","拒绝"]],
+    en:["Source agreement required", "The search is blocked for this source. Accepting applies to this source only and is not consent for everything; declining still shows why the list is limited.", ["View terms","Accept for this source","Decline"]],
+    why:"source=msstore\nagreement=required\npolicy: never auto-accept" },
+  conflict: { icon:"⇄",
+    zh:["元数据在外部被改动", "检测到另一个 manager 操作或锁占用。不抢锁、不删锁。已确认的计划失效，需重新审阅。", ["刷新","等待后重试"]],
+    en:["Changed outside the plugin", "Another manager operation or a held lock was detected. Locks are never stolen or deleted. The confirmed plan is void and must be reviewed again.", ["Refresh","Wait and retry"]],
+    why:"lock=held by another process\nplan token invalidated\nstate=needs review" },
+  denied: { icon:"⛔",
+    zh:["权限被拒绝", "安装器需要管理员权限，或 UAC 被拒绝。本插件不整体提权、不脱离 Job、也不替你弹 UAC。", ["查看指引","复制命令"]],
+    en:["Access denied", "The installer needs administrator rights or UAC was declined. This plugin never elevates itself, never leaves the job, and never raises UAC for you.", ["See guidance","Copy command"]],
+    why:"scope=machine\ninstaller requests elevation\nresult=blocked (denied)\njob membership: unchanged" },
+  partial: { icon:"◐",
+    zh:["部分失败", "重装已成功卸载，但安装失败。软件可能已不存在，数据可能已受影响。目标版本、已用材料与诊断已保留。", ["查看诊断","重新规划"]],
+    en:["Partial failure", "Reinstall uninstalled successfully but the install failed. The package may now be absent and data may be affected. Target version, materials used and diagnostics are kept.", ["View diagnostics","Replan"]],
+    why:"phase=uninstall ok\nphase=install exit=1603\nstate=partial failure\nrolled back=false" }
+};
+
+function renderState(kind) {
+  const S = STATES[kind];
+  const [title, body, acts] = S[LANG];
+  $("state").innerHTML = `
+    <div class="icon">${S.icon}</div>
+    <h3>${esc(title)}</h3>
+    <p>${esc(body)}</p>
+    <div class="acts">${acts.map((a, i) =>
+      `<button class="${i === 0 ? "primary" : ""}">${esc(a)}</button>`).join("")}</div>
+    <div class="why">${esc(S.why)}</div>`;
+}
+
+function renderDetails() {
+  const p = PACKAGES.find(x => x.key === selectedKey);
+  const el = $("details");
+  if (!p) {
+    el.innerHTML = `<div class="detailempty"><span class="big">▤</span>${esc(t("noSelection"))}</div>`;
+    return;
+  }
+  const act = (label, enabled, reason, cls) =>
+    `<button class="${cls || ""}" ${enabled ? "" : "disabled"} title="${esc(enabled ? "" : reason)}">${esc(label)}</button>`;
+  const why = what => {
+    if (what === "install") return p.installed ? "already installed at this identity"
+      : (p.canInstall ? "" : p.limits);
+    if (what === "uninstall") return p.canUninstall ? "" : p.limits;
+    if (what === "reinstall") return "no verified reinstall capability for this backend/version (design §2)";
+    return p.canUpgrade ? "" : (p.hold
+      ? "held/pinned: an explicit policy review is required"
+      : (p.available === "unknown" ? "target version unknown: manual review required" : p.limits));
+  };
+
+  el.innerHTML = `
+    <h2>${esc(p.name)} <span class="tag mgr-${p.manager}">${p.manager === "scoop" ? "Scoop" : "WinGet"}</span></h2>
+    <div class="sub">${esc(t("detailsTitle"))} · ${esc(t("provenance"))}: ${provLabel(p.provenance)}</div>
+    <dl class="kv">
+      <dt>${esc(t("manager"))}</dt><dd>${esc(p.manager)}</dd>
+      <dt>${esc(t("source"))}</dt><dd>${esc(p.source)}</dd>
+      <dt>${esc(t("exactId"))}</dt><dd class="mono">${esc(p.id)}</dd>
+      <dt>${esc(t("scope"))}</dt><dd>${esc(p.scope)}</dd>
+      <dt>${esc(t("arch"))}</dt><dd>${esc(p.arch)}</dd>
+      <dt>${esc(t("installedTo"))}</dt><dd class="mono">${esc(p.installed || "—")} → ${esc(p.available || "—")}</dd>
+      <dt>${esc(t("metadataAt"))}</dt><dd class="mono">${esc(p.meta)}</dd>
+    </dl>
+    <h3>${esc(t("provenance"))}</h3>
+    <div class="note ${p.provenance === "recorded" ? "ok" : "warn"}">
+      ${p.provenance === "recorded"
+        ? (LANG === "zh"
+            ? "backend 有安装记录；仍不保证是该管理器首次安装。"
+            : "The backend holds an install record; that still does not prove it performed the first install.")
+        : (LANG === "zh"
+            ? "只有枚举或目录匹配证据；不标为 managed，也不允许连带操作。"
+            : "Only enumeration or directory evidence; not marked managed and no dependent operation is allowed.")}
+    </div>
+    <h3>${esc(t("policy"))}</h3>
+    <div>${esc(p.hold || (LANG === "zh" ? "无 hold / pin" : "no hold / pin"))}</div>
+    <h3>${esc(t("dependencies"))}</h3><div>${esc(p.deps)}</div>
+    <h3>${esc(t("material"))}</h3><div>${esc(p.material)}</div>
+    <h3>${esc(t("agreements"))}</h3>
+    <div>${p.agreements.length
+      ? p.agreements.map(a => `<span class="tag warn">${esc(a)}</span>`).join(" ")
+      : (LANG === "zh" ? "无待同意条款" : "nothing pending")}</div>
+    <h3>${esc(t("restrictions"))}</h3>
+    <div style="color:var(--subtext)">${esc(p.limits)}</div>
+    ${p.dup ? `<div class="note warn">${esc(t("dupe"))}</div>` : ""}
+    <h3>${esc(t("actionsTitle"))}</h3>
+    <div class="actions">
+      ${act(t("install"), !p.installed && p.canInstall, why("install"), "primary")}
+      ${act(t("uninstall"), !!p.installed && p.canUninstall, why("uninstall"), "danger")}
+      ${act(t("reinstall"), false, why("reinstall"))}
+      ${act(t("upgrade"), !!p.installed && !!p.available && p.available !== p.installed && p.canUpgrade, why("upgrade"))}
+    </div>
+    <div class="reason">${esc(t("whyDis"))}: ${esc(why("reinstall"))}</div>
+    <div class="note">${esc(t("riskData"))}</div>`;
+}
+
+function checkFooter() {
+  $("foot-count").textContent = checked.size;
+  $("btn-review").disabled = checked.size === 0;
+}
+
+/* ---------------------------------------------------------- review dialog */
+function openReview() {
+  const item = PACKAGES.find(p => checked.has(p.key));
+  if (!item) return;
+  reviewItem = item;
+  const srcNeeded = item.agreements.includes("source");
+  reviewConsents = { source: !srcNeeded, installer: false };
+  const op = !item.installed ? "install"
+    : (item.available && item.available !== item.installed ? "upgrade" : "uninstall");
+  $("review-op").textContent = op.toUpperCase();
+  const blocked = item.scope === "machine";
+  $("review-steps").innerHTML = [
+    ["refresh","done"], ["resolve","done"], ["preflight","done"],
+    ["review","active"], ["confirm", blocked ? "blocked" : ""], ["queue",""]
+  ].map(([n, c]) => `<span class="step ${c}">${n}</span>`).join("");
+  $("review-kv").innerHTML = `
+    <dt>${esc(t("manager"))}</dt><dd>${esc(item.manager)} · <span style="font-family:var(--mono)">${esc(item.source)}/${esc(item.id)}</span></dd>
+    <dt>${esc(t("scope"))}</dt><dd>${esc(item.scope)} · ${esc(item.arch)}</dd>
+    <dt>${esc(t("installedTo"))}</dt><dd style="font-family:var(--mono)">${esc(item.installed || "—")} → ${esc(item.available || "—")}</dd>
+    <dt>${esc(t("method"))}</dt><dd>${esc(op)}: native command, exact id, explicit scope</dd>
+    <dt>${esc(t("material"))}</dt><dd>${esc(item.material)}</dd>
+    <dt>${esc(t("dependencies"))}</dt><dd>${esc(item.deps)}</dd>
+    <dt>${esc(t("policy"))}</dt><dd>${esc(item.hold || "—")}</dd>
+    <dt>${esc(t("planRefreshed"))}</dt><dd style="font-family:var(--mono)">10:43:58</dd>
+    <dt>${esc(t("scopeUac"))}</dt><dd>${blocked
+      ? `<span class="tag bad">${esc(t("blocked"))}</span> machine scope needs an elevated installer path — unavailable to this plugin`
+      : "user scope, verified path"}</dd>`;
+  $("review-notes").innerHTML = `<div class="note bad">${esc(t("riskData"))}</div>`;
+
+  const consentRow = (kind, on) => `<label class="consent ${on ? "" : "missing"}">
+      <input type="checkbox" data-consent="${kind}" ${on ? "checked" : ""}>
+      <span class="ctext"><b>${esc(t(kind === "source" ? "srcAgreement" : "instAgreement"))}</b>
+        <span>${esc(t(kind === "source" ? "srcAgreementHint" : "instAgreementHint"))}</span></span>
+      <button type="button" class="ghost" style="align-self:center">${esc(t("view"))}</button>
+    </label>`;
+  $("review-consent").innerHTML =
+    (srcNeeded ? consentRow("source", reviewConsents.source) : "") +
+    consentRow("installer", reviewConsents.installer);
+
+  $("review-gate").textContent = blocked ? t("blocked") : t("needPreflight");
+  $("review-confirm").disabled = true;
+  $("review").hidden = false;
+  $("review-cancel").focus();
+
+  $("review-consent").querySelectorAll("[data-consent]").forEach(cb => {
+    cb.onchange = () => {
+      reviewConsents[cb.dataset.consent] = cb.checked;
+      cb.closest(".consent").classList.toggle("missing", !cb.checked);
+      const ok = (!srcNeeded || reviewConsents.source) && reviewConsents.installer && !blocked;
+      $("review-confirm").disabled = !ok;
+      $("review-gate").textContent = blocked ? t("blocked") : (ok ? t("readyToQueue") : t("needPreflight"));
+      if (ok) $("review-confirm").focus();
+    };
+  });
+}
+
+/* ------------------------------------------------------------------ tasks */
+const TASKS = [
+  { id:1, manager:"scoop", target:"main/vscode", scope:"user", action:"reinstall", cls:"bad",
+    state:{ zh:"安装失败（已卸载）", en:"install failed" },
+    note:{ zh:"已成功卸载；软件可能已不存在。目标版本、已用材料与诊断已保留。",
+           en:"Removed successfully; the package may be absent. Target version, materials and diagnostics are kept." },
+    stage:{ zh:"阶段：安装 · 1 分 12 秒 · 退出码 1603", en:"Stage: install · 1m12s · exit 1603" },
+    acts:["Details","Replan"] },
+  { id:2, manager:"scoop", target:"main/git", scope:"user", action:"upgrade", cls:"warn",
+    state:{ zh:"排队中 / 等待 lane", en:"queued / lane waiting" },
+    note:{ zh:"同一 manager 串行：等第 1 项结束。", en:"Serial per manager: waits for task 1." },
+    stage:{ zh:"阶段：已入队 · 尚未开始", en:"Stage: queued · not started" },
+    acts:["Remove pending"] },
+  { id:3, manager:"winget", target:"winget/jqlang.jq", scope:"user", action:"install", cls:"warn",
+    state:{ zh:"等待交互安装器", en:"interactive pending" },
+    note:{ zh:"安装器已启动但无输出。超时不判成功，也不重复启动。",
+           en:"The installer started with no output. A timeout is not success, and it is not relaunched blindly." },
+    stage:{ zh:"阶段：安装器中 · 时长未知（不定进度）", en:"Stage: installer running · duration unknown (indeterminate)" },
+    prog:true, acts:["Switch to installer","Request cancel"] },
+  { id:4, manager:"winget", target:"winget/Microsoft.PowerToys", scope:"user", action:"upgrade", cls:"warn",
+    state:{ zh:"需要重启", en:"reboot required" },
+    note:{ zh:"不计为完全生效，也不自动重启系统。", en:"Not counted as fully in effect; the system is never restarted automatically." },
+    stage:{ zh:"阶段：安装完成 · 待重启核对", en:"Stage: install done · verify after reboot" },
+    acts:["Verify later"] },
+  { id:5, manager:"scoop", target:"main/nodejs-lts", scope:"user", action:"upgrade", cls:"bad",
+    state:{ zh:"中断 / 未知", en:"interrupted / unknown" },
+    note:{ zh:"宿主退出导致中断，不自动重放；恢复时对照实际安装状态后由你重新规划。",
+           en:"The host exited. Never replayed; on recovery the real install state is checked and you replan." },
+    stage:{ zh:"阶段：未知 · 上次记录 08:55", en:"Stage: unknown · last record 08:55" },
+    acts:["Check state","Replan"] }
+];
+
+function renderTasks() {
+  $("count-tasks").textContent = TASKS.length;
+  $("taskrows").innerHTML = TASKS.map(x => `
+    <div class="taskrow">
+      <span class="idx">${x.id}</span>
+      <span><span class="tag mgr-${x.manager}">${x.manager === "scoop" ? "Scoop" : "WinGet"}</span></span>
+      <span class="target">
+        <div class="t1">${esc(x.target)}</div>
+        <div class="t2">${esc(x.scope)}</div>
+        <div class="note ${x.cls}">${esc(x.note[LANG])}</div>
+        <div class="stage">${esc(x.stage[LANG])}</div>
+        ${x.prog ? `<div class="prog indet"><i></i></div>` : ""}
+        <div class="rowactions">${x.acts.map(a => `<button>${esc(a)}</button>`).join("")}</div>
+      </span>
+      <span>${esc(t(x.action))}</span>
+      <span><span class="tag ${x.cls}">${esc(x.state[LANG])}</span></span>
+    </div>`).join("");
+}
+
+/* -------------------------------------------------------------- commands */
+function setTab(next) {
+  tab = next;
+  document.querySelectorAll(".tab").forEach(b =>
+    b.setAttribute("aria-selected", String(b.dataset.tab === next)));
+  const isTasks = next === "tasks";
+  $("pane-list").hidden = isTasks;
+  $("pane-tasks").hidden = !isTasks;
+  $("count-tasks").className = (TASKS.length ? "" : "quiet") + " badge";
+  if (isTasks) renderTasks(); else renderList();
+  checkFooter();
+}
+
+function applyLang() {
+  document.documentElement.lang = LANG;
+  document.querySelectorAll("[data-i18n]").forEach(el => { el.textContent = t(el.dataset.i18n); });
+  document.querySelectorAll("[data-i18n-ph]").forEach(el => { el.placeholder = t(el.dataset.i18nPh); });
+  renderList(); renderDetails(); checkFooter();
+  if (!$("pane-tasks").hidden) renderTasks();
+  if (!$("review").hidden) openReview();
+}
+
+document.querySelectorAll(".tab").forEach(b => { b.onclick = () => setTab(b.dataset.tab); });
+$("f-backend").onchange = e => { backend = e.target.value; renderList(); };
+$("f-search").oninput = e => { query = e.target.value.trim(); selectedKey = null; renderList(); renderDetails(); };
+$("f-search").onkeydown = e => {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    const first = visiblePackages()[0];
+    if (first) { selectedKey = first.key; renderList(); renderDetails(); }
+  }
+};
+$("rows").onclick = e => {
+  const cb = e.target.closest("[data-check]");
+  if (cb) {
+    const key = cb.dataset.check;
+    checked.has(key) ? checked.delete(key) : checked.add(key);
+    renderList(); checkFooter(); return;
+  }
+  const row = e.target.closest(".row");
+  if (row) { selectedKey = row.dataset.key; renderList(); renderDetails(); }
+};
+$("rows").onkeydown = e => {
+  const list = visiblePackages();
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    e.preventDefault();
+    const i = list.findIndex(p => p.key === selectedKey);
+    const n = e.key === "ArrowDown" ? Math.min(list.length - 1, i + 1) : Math.max(0, i - 1);
+    if (list[n]) {
+      selectedKey = list[n].key; renderList(); renderDetails();
+      const row = document.querySelector(`.row[data-key="${CSS.escape(selectedKey)}"]`);
+      if (row) row.scrollIntoView({ block: "nearest" });
+    }
+  } else if (e.key === " " && selectedKey) {
+    e.preventDefault();
+    checked.has(selectedKey) ? checked.delete(selectedKey) : checked.add(selectedKey);
+    renderList(); checkFooter();
+  }
+};
+$("btn-review").onclick = openReview;
+$("review-cancel").onclick = () => { $("review").hidden = true; };
+$("review-confirm").onclick = () => {
+  $("review").hidden = true;
+  $("foot-status").textContent = t("queueLane");
+  checked.clear(); checkFooter(); renderList();
+};
+$("btn-refresh").onclick = () => { $("foot-status").textContent = t("readOnly"); };
+$("btn-settings").onclick = () => alert(LANG === "zh"
+  ? "设置（模拟稿不实现）：backend 只读路径 / 版本 / 适配状态、可选 API 依赖说明、隐私与清除记录。source/bucket 全量管理与 pin/hold 写管理不在 P0。"
+  : "Settings (not implemented here): read-only backend path/version/adapter state, optional API dependency notes, privacy and clearing records. Full source/bucket and pin/hold writes are not P0.");
+
+$("demo-lang").onchange = e => { LANG = e.target.value; applyLang(); };
+$("demo-theme").onchange = e => { document.documentElement.dataset.theme = e.target.value; };
+$("demo-zoom").onchange = e => { document.documentElement.dataset.zoom = e.target.value; };
+$("demo-state").onchange = e => { demoState = e.target.value; renderList(); };
+
+document.addEventListener("keydown", e => {
+  if (e.key === "Tab") $("foot-focus").textContent = t("focusOrder");
+}, true);
+
+applyLang();
+setTab("installed");
+$("rows").focus();
+</script>
+</body>
+</html>

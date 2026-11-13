@@ -1,0 +1,1274 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>ra9fael.packages — 布局 v7 交互演示（管理器单选 · 发现可操作 · 任务可选）</title>
+<style>
+  /* ============================================================
+     layout-v7 交互演示
+     本轮 4 项改动：
+       1. 管理器过滤改成单选：全部 / Scoop / WinGet 三选一，只有被选中的那个
+          高亮。「全部」不再把 Scoop 与 WinGet 一起点亮。
+       2. 发现页可以勾选；未安装的行只有「安装」和「官网」，不给升级/卸载
+          （那两件事对未安装的包不存在）。
+       3. 「结果」选项里「全部」排在最左，它是默认的广度选项。
+       4. 任务页的每一行都可以选中，并按状态显示自己的按钮。
+     ============================================================ */
+  :root {
+    --bg:#F9F9F9; --layer:#F9F9F9; --page:#F3F3F3; --edge:#B4B4B4;
+    --divider:#E6E6E6; --text:#1B1B1B; --subtext:#666666; --faint:#8A8A8A;
+    --hover:#F0F0F0; --pressed:#E4E4E4; --tagfill:#F0F0F0;
+    --control:#FFFFFF; --controlHover:#F6F6F6; --controlBorder:#D5D5D5;
+    --accent:#0066CC; --accentFill:#0066CC; --accentLine:#0066CC; --accentText:#FFFFFF;
+    --danger:#C42B1C; --dangerFill:#C42B1C; --ok:#0F7B0F; --warn:#9D5D00;
+    --cardR:6px; --ctlR:4px; --smallR:3px;
+    --titleFont:18px; --bodyFont:16px; --captionFont:14px; --smallFont:12px;
+    --rowH:60px; --headerH:64px; --tabH:32px;
+    --font:"Segoe UI Variable Text","Microsoft YaHei UI",system-ui,sans-serif;
+    --mono:"Cascadia Mono",Consolas,monospace;
+  }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  html,body { height:100%; }
+  body { font-family:var(--font); background:#3a3a3e; color:var(--text);
+         display:flex; align-items:center; justify-content:center; padding:18px; }
+
+  /* ---------- 控制条（演示用，不属于插件 UI） ---------- */
+  #demoBar { position:fixed; top:0; left:0; right:0; height:44px; background:#1f1f23;
+             color:#ddd; display:flex; align-items:center; gap:10px; padding:0 14px;
+             font-size:12px; z-index:50; flex-wrap:nowrap; overflow-x:auto; }
+  #demoBar b { color:#fff; font-size:12px; white-space:nowrap; }
+  #demoBar select, #demoBar button { font-size:12px; padding:3px 8px; border-radius:4px;
+             border:1px solid #555; background:#2c2c31; color:#eee; cursor:pointer; white-space:nowrap; }
+  #demoBar button.on { background:#0066CC; border-color:#0066CC; color:#fff; }
+  #demoBar .sep { width:1px; height:20px; background:#444; }
+  #stage { margin-top:44px; width:100%; height:calc(100% - 44px);
+           display:flex; align-items:center; justify-content:center; }
+
+  /* ---------- 插件窗口 ---------- */
+  #win { width:980px; max-width:96%; height:720px; max-height:94%;
+         background:var(--bg); border:1px solid var(--edge); border-radius:8px;
+         display:flex; flex-direction:column; overflow:hidden; position:relative;
+         box-shadow:0 18px 60px rgba(0,0,0,.5); }
+
+  /* ---- 1. 标题栏 ---- */
+  #titlebar { height:var(--headerH); flex:0 0 auto; background:var(--layer);
+              display:flex; align-items:center; gap:10px; padding:0 12px;
+              border-bottom:1px solid var(--divider); }
+  #titlebar .logo { width:20px; height:20px; border-radius:var(--ctlR);
+              background:var(--accentFill); color:var(--accentText); font-weight:700;
+              font-size:var(--captionFont); display:flex; align-items:center; justify-content:center; }
+  #titlebar .title { font-size:var(--bodyFont); font-weight:600; }
+  .chip { background:var(--tagfill); color:var(--subtext); font-size:var(--captionFont);
+          padding:2px 10px; border-radius:999px; white-space:nowrap; }
+  #titlebar .spacer { flex:1; }
+  .btn { background:var(--control); border:1px solid var(--controlBorder);
+         color:var(--text); font-size:var(--captionFont); font-family:var(--font);
+         padding:4px 14px; border-radius:var(--ctlR); cursor:pointer; }
+  .btn:hover { background:var(--controlHover); }
+  .btn.primary { background:var(--accentFill); border-color:var(--accentFill); color:var(--accentText); }
+  .btn.danger { border-color:var(--danger); color:var(--danger); }
+  .btn.primary:disabled, .btn:disabled { opacity:.45; cursor:default; }
+
+  /* ---- 2. 标签页 ---- */
+  #tabs { height:calc(var(--tabH) + 2px); flex:0 0 auto; background:var(--layer);
+          display:flex; align-items:stretch; padding:0 10px; gap:2px;
+          border-bottom:1px solid var(--divider); }
+  .tab { display:flex; align-items:center; padding:0 12px; font-size:var(--smallFont);
+         color:var(--subtext); cursor:pointer; position:relative; user-select:none; }
+  .tab:hover { background:var(--hover); }
+  .tab.on { color:var(--text); font-weight:600; }
+  .tab.on::after { content:""; position:absolute; left:0; right:0; bottom:0;
+                   height:2px; background:var(--accentLine); }
+
+  /* ---- 3. 过滤行 ---- */
+  #filter { min-height:calc(var(--tabH) + 6px); flex:0 0 auto; background:var(--layer);
+            display:flex; align-items:center; gap:8px; padding:0 12px;
+            border-bottom:1px solid var(--divider); flex-wrap:wrap; }
+  #filter .lbl { color:var(--faint); font-size:var(--captionFont); white-space:nowrap; }
+  .seg-ctl { display:flex; align-items:center; gap:2px; background:var(--tagfill);
+             border:1px solid var(--controlBorder); border-radius:var(--ctlR);
+             padding:2px; flex:0 0 auto; }
+  .seg-btn { font-size:var(--captionFont); font-family:var(--font); color:var(--subtext);
+             background:transparent; border:none; border-radius:calc(var(--ctlR) - 1px);
+             padding:2px 10px; cursor:pointer; white-space:nowrap; line-height:1.5; }
+  .seg-btn:hover { background:var(--hover); }
+  .seg-btn.on { background:var(--accentFill); color:var(--accentText); font-weight:600; }
+  .seg-btn.on:hover { background:var(--accentFill); }
+
+  /* 搜索框：内嵌 spinner（改动 1） */
+  #searchWrap { flex:1; min-width:180px; position:relative; display:flex; align-items:center; }
+  #search { width:100%; background:var(--control); border:1px solid var(--controlBorder);
+            color:var(--text); font-size:var(--captionFont); font-family:var(--font);
+            padding:4px 30px 4px 10px; border-radius:var(--ctlR); outline:none; }
+  #search:focus { border-color:var(--accentLine); }
+  #search::placeholder { color:var(--faint); }
+  #searchSpinner { position:absolute; right:9px; width:13px; height:13px; display:none;
+                   border:2px solid var(--controlBorder); border-top-color:var(--accentLine);
+                   border-radius:50%; animation:spin .7s linear infinite; }
+  #searchWrap.busy #searchSpinner { display:block; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+
+  /* ---- 4. 选择工具条（改动 7：多选操作在列表上方） ---- */
+  #selBar { flex:0 0 auto; background:color-mix(in srgb, var(--accentFill) 10%, var(--layer));
+            border-bottom:1px solid var(--divider); display:none; align-items:center;
+            gap:8px; padding:6px 12px; font-size:var(--captionFont); }
+  #selBar.show { display:flex; }
+  #selBar .count { font-weight:600; color:var(--text); white-space:nowrap; }
+  #selBar .note { color:var(--subtext); font-size:var(--smallFont); white-space:nowrap;
+                  overflow:hidden; text-overflow:ellipsis; }
+  #selBar .spacer { flex:1; }
+
+  /* ---- 5. 证据条 ---- */
+  #evidence { height:calc(var(--smallFont) + 16px); flex:0 0 auto; background:var(--page);
+              display:flex; align-items:center; padding:0 12px; gap:6px;
+              border-bottom:1px solid var(--divider);
+              color:var(--faint); font-size:var(--smallFont);
+              white-space:nowrap; overflow:hidden; }
+  #evidence .mono { font-family:var(--mono); }
+
+  /* ---- 6. 主体 ---- */
+  #body { flex:1 1 auto; min-height:0; display:flex; }
+  #listPane { flex:1 1 auto; min-width:320px; display:flex; flex-direction:column; min-width:0; }
+  #listHead { height:calc(var(--smallFont) + 12px); flex:0 0 auto; background:var(--page);
+              display:flex; align-items:center; gap:16px; padding:0 12px;
+              border-bottom:1px solid var(--divider);
+              color:var(--faint); font-size:var(--smallFont); }
+  #listScroll { flex:1 1 auto; min-height:0; overflow-y:auto; }
+  #statePane { display:none; flex:1 1 auto; flex-direction:column; align-items:center;
+               justify-content:center; gap:8px; padding:20px; text-align:center; }
+  #statePane .st-title { font-size:var(--titleFont); font-weight:600; }
+  #statePane .st-body { font-size:var(--captionFont); color:var(--subtext); max-width:420px; }
+  #statePane .st-why { font-size:var(--smallFont); color:var(--faint); font-family:var(--mono); max-width:520px; }
+
+  /* ---- 行（改动 4：版本排版） ---- */
+  .row { height:var(--rowH); flex:0 0 auto; display:flex; align-items:center;
+         position:relative; cursor:pointer; border-bottom:1px solid var(--divider); }
+  .row:hover { background:var(--hover); }
+  .row.sel { background:color-mix(in srgb, var(--accentFill) 14%, transparent); }
+  .row.sel::before { content:""; position:absolute; left:0; top:0; bottom:0; width:2px; background:var(--accentLine); }
+  .row .cb { width:14px; height:14px; margin:0 8px 0 12px; border:1px solid var(--controlBorder);
+             border-radius:var(--smallR); background:var(--control); flex:0 0 auto;
+             display:flex; align-items:center; justify-content:center;
+             font-size:10px; color:var(--accentText); }
+  .row.checked .cb { background:var(--accentFill); border-color:var(--accentFill); }
+  .row .cb::after { content:"✓"; visibility:hidden; }
+  .row.checked .cb::after { visibility:visible; }
+  .row .cb.off { opacity:.35; cursor:default; }
+  .row .main { flex:1; min-width:0; display:flex; flex-direction:column;
+               justify-content:center; gap:3px; padding-right:12px; }
+  .row .l1 { display:flex; align-items:baseline; gap:8px; min-width:0; }
+  .row .name { font-size:var(--bodyFont); font-weight:600; white-space:nowrap;
+               overflow:hidden; text-overflow:ellipsis; max-width:45%; }
+  .row .id { font-family:var(--mono); font-size:var(--smallFont); color:var(--subtext);
+             white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .row .l2 { display:flex; align-items:center; gap:8px; font-size:var(--smallFont);
+             color:var(--subtext); white-space:nowrap; overflow:hidden; }
+  .badge { font-size:var(--smallFont); padding:0 6px; border-radius:999px;
+           border:1px solid currentColor; line-height:calc(var(--smallFont) + 5px); flex:0 0 auto; }
+  .badge.scoop { color:#2b6f8f; } .badge.winget { color:#2f6b3a; }
+  .row .l2 .mono { font-family:var(--mono); }
+  .row .l2 .ok { color:var(--ok); } .row .l2 .warn { color:var(--warn); }
+
+  /* 版本块：不可升级 = 只有当前版本（灰）；可升级 = 当前 → 新版本（新版本醒目） */
+  .ver { display:inline-flex; align-items:center; gap:5px; font-family:var(--mono); flex:0 0 auto; }
+  .ver .cur { color:var(--subtext); }
+  .ver .arrow { color:var(--faint); font-size:calc(var(--smallFont) - 1px); }
+  .ver .new { color:var(--accentText); background:var(--accentFill); font-weight:700;
+              padding:0 6px; border-radius:var(--smallR); }
+  .ver .none { color:var(--faint); }
+
+  /* 加载骨架（改动 1：搜索动效） */
+  .skeleton { height:var(--rowH); display:flex; align-items:center; gap:8px;
+              padding:0 12px; border-bottom:1px solid var(--divider); }
+  .skeleton .sk { background:var(--tagfill); border-radius:var(--smallR);
+                  animation:pulse 1.2s ease-in-out infinite; }
+  .skeleton .sk.cb { width:14px; height:14px; flex:0 0 auto; }
+  .skeleton .sk.a { width:34%; height:13px; }
+  .skeleton .sk.b { width:22%; height:10px; }
+  @keyframes pulse { 0%,100% { opacity:.45; } 50% { opacity:.9; } }
+
+  #splitter { width:5px; flex:0 0 auto; cursor:col-resize; background:transparent; }
+  #detailPane { width:330px; flex:0 0 auto; background:var(--page); border-left:1px solid var(--divider);
+                overflow-y:auto; padding:12px; }
+  #detailPane h3 { font-size:var(--bodyFont); font-weight:600; margin-bottom:2px;
+                   white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  #detailPane .prov { font-size:var(--smallFont); color:var(--faint); margin-bottom:10px; }
+  .kv { display:flex; gap:8px; padding:2px 0; font-size:var(--smallFont); }
+  .kv .k { width:74px; flex:0 0 auto; color:var(--faint); }
+  .kv .v { font-family:var(--mono); color:var(--text); white-space:nowrap;
+           overflow:hidden; text-overflow:ellipsis; }
+  #detailEmpty { color:var(--faint); font-size:var(--captionFont); line-height:1.6; }
+  #detailActions { display:flex; gap:6px; margin-top:12px; flex-wrap:wrap; }
+
+  /* ---- 7. 任务页 ---- */
+  #tasksPage { display:none; flex:1 1 auto; min-height:0; flex-direction:column; }
+  #tasksBar { flex:0 0 auto; display:flex; align-items:center; gap:8px; padding:6px 12px;
+              border-bottom:1px solid var(--divider); background:var(--layer); }
+  #tasksBar .tb-note { color:var(--faint); font-size:var(--smallFont); }
+  #tasksBar .spacer { flex:1; }
+  #tasksHead { height:calc(var(--smallFont) + 12px); flex:0 0 auto; background:var(--page);
+               display:flex; align-items:center; gap:16px; padding:0 12px;
+               border-bottom:1px solid var(--divider);
+               color:var(--faint); font-size:var(--smallFont); }
+  #tasksScroll { flex:1 1 auto; min-height:0; overflow-y:auto; }
+  /* A task row is selectable: its action buttons act on that task, and a
+     selection is what makes "which task am I about to cancel" unambiguous. */
+  .task { padding:10px 12px; border-bottom:1px solid var(--divider);
+          cursor:pointer; position:relative; }
+  .task:hover { background:var(--hover); }
+  .task.sel { background:color-mix(in srgb, var(--accentFill) 14%, transparent); }
+  .task.sel::before { content:""; position:absolute; left:0; top:0; bottom:0;
+                      width:2px; background:var(--accentLine); }
+  .task .tact { display:flex; gap:6px; align-items:center; flex:0 0 auto; }
+  .task .state-badge { flex:0 0 auto; }
+  .task .logToggle { flex:0 0 auto; }
+  .task .t1 { display:flex; align-items:center; gap:10px; font-size:var(--captionFont); flex-wrap:nowrap; }
+  .task .tid { color:var(--faint); flex:0 0 auto; }
+  .task .target { font-family:var(--mono); font-weight:600; }
+  .task .scope, .task .act { color:var(--subtext); font-size:var(--smallFont); }
+  .task .spacer { flex:1; }
+  .state-badge { font-size:var(--smallFont); padding:1px 8px; border-radius:999px;
+                 border:1px solid currentColor; }
+  .st-running { color:var(--accentLine); } .st-wait { color:var(--warn); }
+  .st-ok { color:var(--ok); } .st-fail { color:var(--danger); }
+  .task .note { margin-top:4px; font-size:var(--captionFont); color:var(--subtext); }
+  .task .note.bad { color:var(--danger); }
+  .task .phases { display:flex; align-items:center; gap:4px; margin-top:6px; flex-wrap:wrap; }
+  .task .phases .spacer { flex:1; min-width:8px; }
+  .task .phase { font-size:var(--smallFont); font-family:var(--mono); padding:1px 7px;
+                 border-radius:999px; border:1px solid var(--controlBorder); color:var(--faint); }
+  .task .phase.done { border-color:var(--ok); color:var(--ok); }
+  .task .phase.active { border-color:var(--accentLine); color:var(--accentLine);
+                        background:color-mix(in srgb, var(--accentLine) 10%, transparent); }
+  .task .phase-sep { color:var(--faint); font-size:var(--smallFont); }
+  .task .logToggle { font-size:var(--smallFont); color:var(--accentLine); cursor:pointer;
+                     background:none; border:none; font-family:var(--font); padding:0; }
+  .task .log { margin-top:6px; background:var(--page); border:1px solid var(--divider);
+               border-radius:var(--smallR); padding:6px 8px; font-family:var(--mono);
+               font-size:var(--smallFont); max-height:150px; overflow-y:auto; }
+  .task .log .ln { display:flex; gap:8px; padding:1px 0; }
+  .task .log .at { color:var(--faint); flex:0 0 auto; }
+  .task .log .ph { color:var(--subtext); flex:0 0 62px; }
+  .task .log .tx { color:var(--text); white-space:pre-wrap; word-break:break-word; }
+  .task .log .ln.ok .tx { color:var(--ok); }
+  .task .log .ln.error .tx { color:var(--danger); }
+  .task .log .ln.warning .tx { color:var(--warn); }
+
+  /* ---- 8. 页脚（改动 5：只有状态，没有按钮） ---- */
+  #footer { height:calc(var(--tabH) + 2px); flex:0 0 auto; background:var(--layer);
+            border-top:1px solid var(--divider); display:flex; align-items:center;
+            gap:12px; padding:0 12px; }
+  #footer .status { color:var(--subtext); font-size:var(--captionFont); white-space:nowrap;
+                    overflow:hidden; text-overflow:ellipsis; }
+
+  /* ---- 右键菜单（改动 6） ---- */
+  #ctxMenu { position:absolute; z-index:40; display:none; min-width:190px;
+             background:var(--layer); border:1px solid var(--edge); border-radius:var(--cardR);
+             box-shadow:0 8px 28px rgba(0,0,0,.35); padding:4px; }
+  #ctxMenu.show { display:block; }
+  #ctxMenu .mi { display:flex; align-items:center; gap:8px; padding:5px 10px;
+                 font-size:var(--captionFont); border-radius:var(--smallR); cursor:pointer;
+                 white-space:nowrap; }
+  #ctxMenu .mi:hover { background:var(--hover); }
+  #ctxMenu .mi.disabled { color:var(--faint); cursor:default; }
+  #ctxMenu .mi.disabled:hover { background:transparent; }
+  #ctxMenu .mi.danger { color:var(--danger); }
+  #ctxMenu .mi .k { margin-left:auto; color:var(--faint); font-size:var(--smallFont);
+                    font-family:var(--mono); }
+  #ctxMenu .sep { height:1px; background:var(--divider); margin:4px 2px; }
+  #ctxMenu .hdr { padding:4px 10px 6px; font-size:var(--smallFont); color:var(--faint);
+                  font-family:var(--mono); white-space:nowrap; overflow:hidden;
+                  text-overflow:ellipsis; max-width:260px; }
+
+  /* ---- 审阅对话框 ---- */
+  #reviewOverlay { display:none; position:absolute; inset:0; z-index:20;
+                   background:rgba(0,0,0,.55); align-items:center; justify-content:center; }
+  #review { width:560px; max-width:92%; max-height:88%; background:var(--layer);
+            border:1px solid var(--edge); border-radius:var(--cardR);
+            display:flex; flex-direction:column; overflow:hidden; }
+  #reviewHead { height:calc(var(--tabH) + 6px); flex:0 0 auto; display:flex; align-items:center;
+                gap:8px; padding:0 14px; border-bottom:1px solid var(--divider); }
+  #reviewHead .op { background:var(--accentFill); color:var(--accentText); font-size:var(--smallFont);
+                    font-weight:600; padding:1px 8px; border-radius:var(--smallR); }
+  #reviewHead .rt { font-size:var(--smallFont); font-weight:600; }
+  #reviewBody { flex:1 1 auto; min-height:0; overflow-y:auto; padding:12px 14px; }
+  #reviewBody .risk { color:var(--danger); font-size:var(--captionFont); margin-top:8px; }
+  #reviewFoot { flex:0 0 auto; display:flex; align-items:center; gap:8px; padding:8px 14px;
+                border-top:1px solid var(--divider); }
+  #reviewFoot .spacer { flex:1; }
+  #reviewFoot .hint { color:var(--faint); font-size:var(--smallFont); }
+  .actpick { display:flex; gap:6px; margin-bottom:10px; }
+  .actpick .ap { font-size:var(--captionFont); padding:3px 12px; border-radius:var(--ctlR);
+                 border:1px solid var(--controlBorder); background:var(--control);
+                 color:var(--text); cursor:pointer; font-family:var(--font); }
+  .actpick .ap.on { background:var(--accentFill); border-color:var(--accentFill);
+                    color:var(--accentText); font-weight:600; }
+  .agree { display:flex; gap:8px; align-items:flex-start; border:1px solid var(--warn);
+           border-radius:var(--ctlR); padding:7px; margin-top:8px; }
+  .agree .box { width:14px; height:14px; border:1px solid var(--controlBorder);
+                border-radius:var(--smallR); background:var(--control); flex:0 0 auto;
+                margin-top:2px; cursor:pointer; display:flex; align-items:center;
+                justify-content:center; font-size:10px; color:var(--accentText); }
+  .agree .box.on { background:var(--accentFill); border-color:var(--accentFill); }
+  .agree .box.on::after { content:"✓"; }
+  .agree .txt b { font-size:var(--captionFont); display:block; }
+  .agree .txt span { font-size:var(--smallFont); color:var(--faint); }
+
+  /* 深色主题 */
+  body.dark {
+    --bg:#1F1F1F; --layer:#272727; --page:#1A1A1A; --edge:#3A3A3A;
+    --divider:#333333; --text:#EDEDED; --subtext:#B4B4B4; --faint:#8A8A8A;
+    --hover:#2E2E2E; --pressed:#383838; --tagfill:#2E2E2E;
+    --control:#2A2A2A; --controlHover:#333333; --controlBorder:#3F3F3F;
+    --accent:#4C9AFF; --accentFill:#0F6CBD; --accentLine:#4C9AFF; --accentText:#FFFFFF;
+    --danger:#FF6B5E; --dangerFill:#C42B1C; --ok:#6CCB5F; --warn:#E8A33D;
+  }
+  body.dark .badge.scoop { color:#6FB6D9; }
+  body.dark .badge.winget { color:#7FC98F; }
+</style>
+</head>
+<body>
+
+<div id="demoBar">
+  <b>v7 演示</b>
+  <span class="sep"></span>
+  <label>风格 <select id="styleSel">
+    <option value="fluent">fluent</option>
+    <option value="brand">brand</option>
+    <option value="tactile">tactile</option>
+    <option value="liquid">liquid</option>
+  </select></label>
+  <button id="darkBtn">深色</button>
+  <label>大小 <select id="sizeSel">
+    <option value="dense">dense</option>
+    <option value="compact">compact</option>
+    <option value="standard" selected>standard</option>
+    <option value="roomy">roomy</option>
+  </select></label>
+  <span class="sep"></span>
+  <button id="simSearch">模拟搜索（看动效）</button>
+  <button id="reviewBtn">打开审阅</button>
+  <span class="sep"></span>
+  <span style="color:#888">右键任意行 = 单项操作 · 任务行可点选</span>
+</div>
+
+<div id="stage">
+<div id="win">
+
+  <!-- 1. 标题栏 -->
+  <div id="titlebar">
+    <div class="logo">P</div>
+    <div class="title">软件包</div>
+    <span class="chip" id="rightsChip">普通权限 · 未提权</span>
+    <div class="spacer"></div>
+    <button class="btn" id="refreshBtn">刷新</button>
+    <button class="btn" id="settingsBtn">设置</button>
+  </div>
+
+  <!-- 2. 标签页 -->
+  <div id="tabs">
+    <div class="tab on" data-tab="installed">已安装</div>
+    <div class="tab" data-tab="discover">发现</div>
+    <div class="tab" data-tab="updates">更新</div>
+    <div class="tab" data-tab="tasks">任务 <span id="taskCount"></span></div>
+  </div>
+
+  <!-- 3. 过滤行 -->
+  <div id="filter">
+    <span class="lbl">管理器</span>
+    <!-- 单选语义：全部 / Scoop / WinGet 三选一。选「全部」时只有「全部」高亮，
+         不再同时点亮 Scoop 与 WinGet —— 高亮表示"当前选中"，而"全部"本身
+         就是一个选项，点亮三个按钮会让"我到底选了什么"变得含糊。 -->
+    <div class="seg-ctl" id="backendSeg">
+      <button class="seg-btn on" data-mgr="all">全部</button>
+      <button class="seg-btn" data-mgr="scoop">Scoop</button>
+      <button class="seg-btn" data-mgr="winget">WinGet</button>
+    </div>
+
+    <!-- 改动 8：已安装按来源筛选 -->
+    <span class="lbl" id="srcLbl">来源</span>
+    <div class="seg-ctl" id="sourceSeg">
+      <button class="seg-btn on" data-src="all">全部</button>
+      <button class="seg-btn" data-src="managed">管理器管理</button>
+      <button class="seg-btn" data-src="user">用户自装</button>
+    </div>
+
+    <!-- 改动 2/3：发现页的「结果」筛选。「全部」在最左边：它是默认的广度
+         选项，放中间会让默认状态看起来像某种特殊过滤。 -->
+    <span class="lbl" id="discLbl" style="display:none">结果</span>
+    <div class="seg-ctl" id="discSeg" style="display:none">
+      <button class="seg-btn on" data-disc="all">全部</button>
+      <button class="seg-btn" data-disc="new">仅未安装</button>
+      <button class="seg-btn" data-disc="installed">仅已安装</button>
+    </div>
+
+    <div id="searchWrap" style="display:none">
+      <input id="search" placeholder="搜索包名或精确 ID（只查询，不安装）">
+      <div id="searchSpinner"></div>
+    </div>
+  </div>
+
+  <!-- 4. 选择工具条（改动 7） -->
+  <div id="selBar">
+    <span class="count" id="selCount">已选 0 项</span>
+    <span class="note" id="selNote"></span>
+    <div class="spacer"></div>
+    <button class="btn primary" id="selUpgrade">升级所选…</button>
+    <button class="btn danger" id="selUninstall">卸载所选…</button>
+    <button class="btn primary" id="selInstall" style="display:none">安装所选…</button>
+    <button class="btn" id="selClear">清除选择</button>
+  </div>
+
+  <!-- 5. 证据条 -->
+  <div id="evidence">
+    <span id="scanLine">扫描于 14:32:07</span>&nbsp;·&nbsp;
+    <span class="mono" id="backendLine">scoop 0.6.0 ✓ · winget 1.29.380 ✓</span>
+  </div>
+
+  <!-- 6. 主体 -->
+  <div id="body">
+    <div id="listPane">
+      <div id="listHead">
+        <span>名称 / 精确 ID</span>
+        <span id="listHeadNote" style="margin-left:auto"></span>
+      </div>
+      <div id="statePane">
+        <div class="st-title" id="stTitle"></div>
+        <div class="st-body" id="stBody"></div>
+        <div class="st-why" id="stWhy"></div>
+      </div>
+      <div id="listScroll"></div>
+    </div>
+    <div id="splitter"></div>
+    <div id="detailPane">
+      <div id="detailEmpty">从左侧选择一项，查看完整身份、来源证据、依赖与能力限制。查询不会安装任何东西。</div>
+      <div id="detailBody" style="display:none">
+        <h3 id="dName"></h3>
+        <div class="prov" id="dProv"></div>
+        <div id="dKv"></div>
+        <div id="detailActions"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 7. 任务页 -->
+  <div id="tasksPage">
+    <div id="tasksBar">
+      <button class="btn" id="pauseBtn">暂停队列</button>
+      <span class="tb-note" id="queueNote">空闲 · 0 个运行中</span>
+      <div class="spacer"></div>
+      <button class="btn" id="clearBtn">清空已完成</button>
+      <button class="btn" id="rescanBtn">重新扫描</button>
+    </div>
+    <div id="tasksHead">
+      <span>#</span><span>管理器</span><span>精确目标 / 作用域</span><span>状态</span>
+    </div>
+    <div id="tasksScroll"></div>
+  </div>
+
+  <!-- 8. 页脚：只有状态（改动 5） -->
+  <div id="footer">
+    <span class="status" id="statusLine">就绪</span>
+  </div>
+
+  <!-- 右键菜单（改动 6） -->
+  <div id="ctxMenu"></div>
+
+  <!-- 审阅对话框 -->
+  <div id="reviewOverlay">
+    <div id="review">
+      <div id="reviewHead">
+        <span class="op" id="rvOp">UPGRADE</span>
+        <span class="rt">审阅操作</span>
+      </div>
+      <div id="reviewBody">
+        <div class="actpick" id="rvActions"></div>
+        <div id="rvKv"></div>
+        <div class="risk" id="rvRisk"></div>
+        <div class="agree">
+          <div class="box" id="rvAgree"></div>
+          <div class="txt">
+            <b id="rvAgreeTitle">源协议（source agreement）</b>
+            <span id="rvAgreeText">包来自其声明的源；插件不下载、不校验材料。</span>
+          </div>
+        </div>
+      </div>
+      <div id="reviewFoot">
+        <span class="hint" id="rvHint">未确认 → 确认按钮保持禁用</span>
+        <div class="spacer"></div>
+        <button class="btn" id="rvCancel">取消</button>
+        <button class="btn primary" id="rvConfirm" disabled>确认并加入队列</button>
+      </div>
+    </div>
+  </div>
+
+</div>
+</div>
+
+<script>
+/* ============================================================
+   状态
+   ============================================================ */
+const state = {
+  tab: "installed",
+  // Manager filter is single-select: "all" | "scoop" | "winget". "all" is a real
+  // option, not the sum of the other two, so exactly one button is ever lit.
+  mgrFilter: "all",
+  source: "all",        // 改动 8：all | managed | user
+  disc: "all",          // 改动 2/3：all | new | installed（全部在最左）
+  search: "",
+  searching: false,
+  sel: -1,
+  checked: new Set(),
+  ctxRow: -1,
+  taskSel: -1,
+  reviewAction: "upgrade",
+  agreed: false
+};
+
+/* ============================================================
+   数据
+   managed: winget 是否管理该包（false = 用户自装 / ARP 观察行）
+   ============================================================ */
+const INSTALLED = [
+  { name:"ripgrep", id:"BurntSushi.ripgrep.MSVC", mgr:"winget", src:"winget", scope:"user",
+    inst:"14.1.0", avail:"14.1.2", prov:"backend-recorded", managed:true },
+  { name:"git", id:"git", mgr:"scoop", src:"main", scope:"user",
+    inst:"2.47.0", avail:"2.47.1", prov:"backend-recorded", managed:true },
+  { name:"Microsoft.PowerToys", id:"Microsoft.PowerToys", mgr:"winget", src:"winget", scope:"user",
+    inst:"0.86.0", avail:"0.87.1", prov:"backend-recorded", managed:true },
+  { name:"vscode", id:"vscode", mgr:"scoop", src:"extras", scope:"user",
+    inst:"1.94.2", avail:"", prov:"backend-recorded", managed:true },
+  { name:"isOfficeAI.OfficeCLI", id:"isOfficeAI.OfficeCLI", mgr:"winget", src:"winget", scope:"unknown",
+    inst:"1.0.158", avail:"", prov:"backend-recorded", managed:true },
+  { name:"nodejs-lts", id:"nodejs-lts", mgr:"scoop", src:"main", scope:"user",
+    inst:"22.9.0", avail:"22.11.0", prov:"backend-recorded", managed:true },
+  { name:"aria2", id:"aria2", mgr:"scoop", src:"main", scope:"user",
+    inst:"1.37.0-1", avail:"", prov:"backend-recorded", managed:true },
+  { name:"lilex-nf", id:"lilex-nf", mgr:"scoop", src:"nerd-fonts", scope:"user",
+    inst:"3.5.1", avail:"", prov:"backend-recorded", managed:true },
+  { name:"Monaspace-NF-Mono", id:"Monaspace-NF-Mono", mgr:"scoop", src:"nerd-fonts", scope:"user",
+    inst:"3.5.1", avail:"", prov:"backend-recorded", managed:true },
+  { name:"scoop-search", id:"scoop-search", mgr:"scoop", src:"main", scope:"user",
+    inst:"2.1.0", avail:"", prov:"backend-recorded", managed:true },
+  { name:"smiley-sans", id:"smiley-sans", mgr:"scoop", src:"nerd-fonts", scope:"user",
+    inst:"2.0.1", avail:"", prov:"backend-recorded", managed:true },
+  // 用户自装：winget list 能看到，但不是 winget 装的（ARP 观察行）
+  { name:"Altium Designer Agile 26", id:"ARP\\Machine\\X64\\Altium Designer Agile {12AD1C37-60DE-4...",
+    mgr:"winget", src:"ARP", scope:"machine", inst:"26.7.1.25", avail:"",
+    prov:"observed", managed:false },
+  { name:"AMD Ryzen Master", id:"ARP\\Machine\\X64\\AMD Ryzen Master", mgr:"winget", src:"ARP",
+    scope:"machine", inst:"2.14.1.3286", avail:"", prov:"observed", managed:false },
+  { name:"AVC Encoder Video Extension", id:"MSIX\\Microsoft.AVCEncoderVideoExtension_1.1.47.0_...",
+    mgr:"winget", src:"MSIX", scope:"user", inst:"1.1.47.0", avail:"",
+    prov:"observed", managed:false }
+];
+
+// 发现页：搜索结果（winget search + scoop search 的真实形状）
+const DISCOVER = [
+  { name:"Vim", id:"vim.vim", mgr:"winget", src:"winget", scope:"unknown",
+    inst:"", avail:"9.2.1310", prov:"backend-recorded", managed:true },
+  { name:"Vim", id:"vim.vim.nightly", mgr:"winget", src:"winget", scope:"unknown",
+    inst:"", avail:"9.2.1186", prov:"backend-recorded", managed:true },
+  { name:"mnml", id:"ChrisMcLennan.mnml", mgr:"winget", src:"winget", scope:"unknown",
+    inst:"", avail:"0.3.5", prov:"backend-recorded", managed:true },
+  { name:"Neovim", id:"Neovim.Neovim", mgr:"winget", src:"winget", scope:"unknown",
+    inst:"", avail:"0.12.6", prov:"backend-recorded", managed:true },
+  { name:"vimacc Professional IPVMS", id:"accellence.vimaccProfessional", mgr:"winget",
+    src:"winget", scope:"unknown", inst:"", avail:"2.2.15.5", prov:"backend-recorded", managed:true },
+  // scoop search 结果（0.6.0 表格形状）
+  { name:"vim", id:"vim", mgr:"scoop", src:"main", scope:"user",
+    inst:"", avail:"9.2.1320", prov:"backend-recorded", managed:true },
+  { name:"neovim", id:"neovim", mgr:"scoop", src:"main", scope:"user",
+    inst:"", avail:"0.12.6", prov:"backend-recorded", managed:true },
+  { name:"fvim", id:"fvim", mgr:"scoop", src:"extras", scope:"user",
+    inst:"", avail:"0.3.549", prov:"backend-recorded", managed:true },
+  { name:"neovim-qt", id:"neovim-qt", mgr:"scoop", src:"extras", scope:"user",
+    inst:"", avail:"0.2.20", prov:"backend-recorded", managed:true },
+  { name:"vim-nightly", id:"vim-nightly", mgr:"scoop", src:"versions", scope:"user",
+    inst:"", avail:"9.2.1332", prov:"backend-recorded", managed:true },
+  { name:"vim-tux", id:"vim-tux", mgr:"scoop", src:"versions", scope:"user",
+    inst:"", avail:"9.2.0699_20260622", prov:"backend-recorded", managed:true }
+];
+
+const UPDATES = INSTALLED.filter(r => r.avail && r.avail !== r.inst);
+
+const TASKS = [
+  { id:"T-01", mgr:"winget", target:"git", scope:"user", act:"upgrade",
+    state:"running", st:"执行中", cls:"st-running",
+    note:"winget upgrade --id git --exact（材料由 backend 自行下载）",
+    phases:["acquire","install","verify"], phaseIdx:1,
+    log:[
+      { at:"20:14:30", ph:"acquire", kind:"info", tx:"计划已确认：upgrade git（scope=user）" },
+      { at:"20:14:30", ph:"acquire", kind:"info", tx:"argv: winget upgrade --id git --exact --disable-interactivity" },
+      { at:"20:14:30", ph:"acquire", kind:"ok",   tx:"进程已启动 pid=48212；加入 Job（KILL_ON_JOB_CLOSE）" },
+      { at:"20:14:31", ph:"install", kind:"info", tx:"已找到 git 2.47.1；下载中" },
+      { at:"20:14:38", ph:"install", kind:"info", tx:"下载 68% · %USERPROFILE%\\AppData\\Local\\Temp\\winget" }
+    ] },
+  { id:"T-02", mgr:"scoop", target:"nodejs-lts", scope:"user", act:"upgrade",
+    state:"queued", st:"排队中", cls:"st-wait",
+    note:"同一管理器的任务串行；不同管理器不抢同一实例",
+    phases:["acquire","install","verify"], phaseIdx:-1,
+    log:[ { at:"20:14:30", ph:"queue", kind:"info", tx:"已入队；lane=scoop 可用，等待调度" } ] },
+  { id:"T-03", mgr:"scoop", target:"aria2", scope:"user", act:"upgrade",
+    state:"succeeded", st:"已完成（已核对）", cls:"st-ok",
+    note:"退出码 0 不等于成功：执行后重新读取已装版本才判定",
+    phases:["acquire","install","verify"], phaseIdx:3,
+    log:[
+      { at:"20:12:02", ph:"acquire", kind:"info", tx:"argv: powershell -Command & '%USERPROFILE%\\scoop\\shims\\scoop.ps1' update aria2" },
+      { at:"20:12:09", ph:"install", kind:"info", tx:"aria2: 1.37.0-1 -> 1.37.0-1" },
+      { at:"20:12:21", ph:"install", kind:"ok",   tx:"进程退出", exit:0 },
+      { at:"20:12:21", ph:"verify",  kind:"ok",   tx:"核对通过：已装版本与目标一致" }
+    ] },
+  { id:"T-04", mgr:"winget", target:"Microsoft.PowerToys", scope:"user", act:"upgrade",
+    state:"failed", st:"失败", cls:"st-fail",
+    note:"安装器退出 0x8A15002B；执行后核对未通过，包保持原版本",
+    phases:["acquire","install","verify"], phaseIdx:1,
+    log:[
+      { at:"20:08:44", ph:"acquire", kind:"info",  tx:"argv: winget upgrade --id Microsoft.PowerToys --exact" },
+      { at:"20:08:52", ph:"install", kind:"error", tx:"安装器失败：Installer failed with exit code: 0x8A15002B" },
+      { at:"20:08:52", ph:"install", kind:"warning", tx:"未做任何回滚：安装器已写入的内容保持原样" },
+      { at:"20:08:53", ph:"verify",  kind:"info",  tx:"重新读取 winget list：仍为 0.86.0" }
+    ] }
+];
+
+/* ============================================================
+   工具
+   ============================================================ */
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c =>
+  ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[c]));
+
+function installedIds() {
+  const set = new Set();
+  for (const r of INSTALLED) set.add(r.mgr + "|" + r.id);
+  return set;
+}
+
+/* 改动 2：发现页与已安装解耦。
+   「结果」默认「全部」（见筛选行的选项顺序），但发现页本身只有在有搜索词时
+   才有内容——它不会回退到已安装清单。 */
+function discoverRows() {
+  const have = installedIds();
+  const isInstalled = r => have.has(r.mgr + "|" + r.id);
+  let rows = DISCOVER.slice();
+  if (state.disc === "new") rows = rows.filter(r => !isInstalled(r));
+  else if (state.disc === "installed") rows = rows.filter(isInstalled);
+  return rows;
+}
+
+function tabRows() {
+  if (state.tab === "updates") return UPDATES.slice();
+  if (state.tab === "discover") return discoverRows();
+  return INSTALLED.slice();
+}
+
+function visibleRows() {
+  let rows = tabRows();
+  // Single-select manager filter: "all" means both, "scoop"/"winget" mean one.
+  if (state.mgrFilter !== "all")
+    rows = rows.filter(r => r.mgr === state.mgrFilter);
+  // 改动 8：已安装按来源筛选
+  if (state.tab === "installed" && state.source !== "all")
+    rows = rows.filter(r => state.source === "managed" ? r.managed : !r.managed);
+  if (state.tab === "discover" && state.search) {
+    const q = state.search.toLowerCase();
+    rows = rows.filter(r => r.name.toLowerCase().includes(q) || r.id.toLowerCase().includes(q));
+  }
+  return rows;
+}
+
+/* 改动 4：版本排版。
+   不可升级 → 只显示当前版本（灰）。
+   可升级   → 当前版本 → 新版本，新版本用强调色块，一眼可见。 */
+function versionHtml(r) {
+  const cur = r.inst || "";
+  const next = r.avail || "";
+  const upgradable = next && next !== cur;
+  if (!cur && !next) return `<span class="ver"><span class="none">版本未知</span></span>`;
+  if (!cur) return `<span class="ver"><span class="none">未安装</span><span class="arrow">·</span><span class="cur">${esc(next)}</span></span>`;
+  if (!upgradable) return `<span class="ver"><span class="cur">${esc(cur)}</span></span>`;
+  return `<span class="ver"><span class="cur">${esc(cur)}</span><span class="arrow">→</span><span class="new">${esc(next)}</span></span>`;
+}
+
+/* ============================================================
+   渲染：列表
+   ============================================================ */
+function renderList() {
+  const list = $("listScroll");
+  const pane = $("statePane");
+
+  // 改动 1：搜索中显示骨架行，而不是空白列表
+  if (state.searching) {
+    pane.style.display = "none";
+    list.style.display = "block";
+    list.innerHTML = Array.from({ length: 6 }, () => `
+      <div class="skeleton">
+        <div class="sk cb"></div>
+        <div style="flex:1;display:flex;flex-direction:column;gap:6px">
+          <div class="sk a"></div><div class="sk b"></div>
+        </div>
+      </div>`).join("");
+    $("listHeadNote").textContent = "搜索中…";
+    return;
+  }
+
+  const rows = visibleRows();
+  $("listHeadNote").textContent = rows.length + " 项";
+
+  if (rows.length === 0) {
+    list.style.display = "none";
+    pane.style.display = "flex";
+    if (state.tab === "discover" && !state.search && state.disc === "all") {
+      $("stTitle").textContent = "输入关键词开始搜索";
+      $("stBody").textContent =
+        "发现页只显示搜索结果，不重复已安装清单。搜索会同时查询 Scoop 与 WinGet。";
+    } else if (state.tab === "discover" && !state.search) {
+      $("stTitle").textContent = "输入关键词开始搜索";
+      $("stBody").textContent =
+        "发现页只显示搜索结果。当前「结果」过滤是「" +
+        ({ new: "仅未安装", installed: "仅已安装" }[state.disc] || "全部") +
+        "」。";
+    } else if (state.tab === "discover" && state.disc === "new") {
+      $("stTitle").textContent = "没有未安装的匹配项";
+      $("stBody").textContent = "所有匹配的包都已安装。把「结果」切到「全部」可以看到它们。";
+    } else if (state.tab === "updates") {
+      $("stTitle").textContent = "没有可升级的包";
+      $("stBody").textContent = "更新列表只显示两个 backend 都能证明目标版本的条目。";
+    } else {
+      $("stTitle").textContent = "没有匹配的包";
+      $("stBody").textContent = "调整管理器、来源或搜索词后重试。";
+    }
+    $("stWhy").textContent = `tab: ${state.tab}  manager: ${state.mgrFilter}`
+      + (state.tab === "installed" ? `  source: ${state.source}` : "")
+      + (state.tab === "installed" ? `  source: ${state.source}` : "")
+      + (state.tab === "discover" ? `  result: ${state.disc}  search: "${state.search}"` : "");
+    return;
+  }
+
+  pane.style.display = "none";
+  list.style.display = "block";
+  list.innerHTML = rows.map((r, i) => {
+    const checked = state.checked.has(i);
+    // Every tab can be selected now, Discover included: a search result can be
+    // installed, so it is a real candidate, not a read-only row.
+    return `<div class="row ${state.sel === i ? "sel" : ""} ${checked ? "checked" : ""}" data-i="${i}">
+      <div class="cb" data-cb="${i}"></div>
+      <div class="main">
+        <div class="l1"><span class="name">${esc(r.name)}</span><span class="id">${esc(r.id)}</span></div>
+        <div class="l2">
+          <span class="badge ${r.mgr}">${r.mgr === "scoop" ? "Scoop" : "WinGet"}</span>
+          <span>${esc(r.src)} · ${esc(r.scope)}</span>
+          ${versionHtml(r)}
+          ${r.prov === "observed" ? `<span class="warn">用户自装</span>` : ""}
+        </div>
+      </div>
+    </div>`;
+  }).join("");
+
+  list.querySelectorAll(".row").forEach(el => {
+    const i = Number(el.dataset.i);
+    el.addEventListener("click", e => {
+      if (e.target.classList.contains("cb")) return;
+      state.sel = i; renderAll();
+    });
+    el.addEventListener("contextmenu", e => {
+      e.preventDefault();
+      state.sel = i;
+      openCtx(e.clientX, e.clientY, i);
+    });
+    const cb = el.querySelector(".cb");
+    if (cb) {
+      cb.addEventListener("click", e => {
+        e.stopPropagation();
+        if (state.checked.has(i)) state.checked.delete(i); else state.checked.add(i);
+        renderAll();
+      });
+    }
+  });
+}
+
+/* ============================================================
+   渲染：详情
+   ============================================================ */
+function renderDetail() {
+  const rows = visibleRows();
+  const empty = $("detailEmpty"), body = $("detailBody");
+  if (state.sel < 0 || state.sel >= rows.length) {
+    empty.style.display = "block"; body.style.display = "none"; return;
+  }
+  empty.style.display = "none"; body.style.display = "block";
+  const r = rows[state.sel];
+  $("dName").textContent = r.name;
+  $("dProv").textContent = "详情 · 归属 " + r.prov;
+  const kv = [
+    ["管理器", r.mgr], ["来源", r.src], ["精确 ID", r.id], ["作用域", r.scope],
+    ["已装", r.inst || "未安装"], ["可用", r.avail || "—"]
+  ];
+  if (r.inst && r.avail && r.avail !== r.inst) kv.push(["可升级", "是"]);
+  if (!r.managed) kv.push(["归属", "用户自装（非 WinGet 管理）"]);
+  $("dKv").innerHTML = kv.map(([k, v]) =>
+    `<div class="kv"><span class="k">${k}</span><span class="v">${esc(v)}</span></div>`).join("");
+
+  // Actions are derived from the row's real state, not shown disabled as a hint.
+  // An uninstalled search result can only be installed (or looked up), so offering
+  // a greyed-out "uninstall" would suggest an operation that cannot exist.
+  const upgradable = r.avail && r.avail !== r.inst;
+  const installed = !!r.inst;
+  const actions = $("detailActions");
+  const buttons = [];
+  if (!installed) {
+    buttons.push(`<button class="btn primary" data-act="install">安装…</button>`);
+    buttons.push(`<button class="btn" data-act="homepage">官网 / 项目页</button>`);
+  } else {
+    if (upgradable) buttons.push(`<button class="btn primary" data-act="upgrade">升级到 ${esc(r.avail)}…</button>`);
+    buttons.push(`<button class="btn danger" data-act="uninstall">卸载…</button>`);
+    buttons.push(`<button class="btn" data-act="homepage">官网 / 项目页</button>`);
+  }
+  actions.innerHTML = buttons.join("");
+  actions.querySelectorAll("button").forEach(b => {
+    b.addEventListener("click", () => {
+      const act = b.dataset.act;
+      if (act === "homepage") { setStatus(`打开项目页：${r.id}`); return; }
+      openReview(act, state.sel);
+    });
+  });
+}
+
+/* ============================================================
+   渲染：选择工具条（改动 7）
+   ============================================================ */
+function renderSelBar() {
+  const bar = $("selBar");
+  const n = state.checked.size;
+  if (n === 0) { bar.classList.remove("show"); return; }
+  bar.classList.add("show");
+  $("selCount").textContent = `已选 ${n} 项`;
+  const rows = visibleRows();
+  const picked = [...state.checked].map(i => rows[i]).filter(Boolean);
+  const upgradable = picked.filter(r => r.avail && r.avail !== r.inst).length;
+  const installed = picked.filter(r => r.inst).length;
+  const installable = picked.filter(r => !r.inst).length;
+  $("selNote").textContent = [
+    upgradable ? `${upgradable} 个可升级` : "",
+    installed ? `${installed} 个已安装（可卸载）` : "",
+    installable ? `${installable} 个可安装` : ""
+  ].filter(Boolean).join(" · ");
+  // On Discover almost everything is uninstalled, so the useful bulk action is
+  // Install, not Upgrade/Uninstall. Showing the wrong pair greys out both and makes
+  // the selection look broken.
+  const showInstall = installable > 0 && installed === 0;
+  $("selUpgrade").style.display = showInstall ? "none" : "";
+  $("selUninstall").style.display = showInstall ? "none" : "";
+  $("selInstall").style.display = showInstall ? "" : "none";
+  $("selUpgrade").disabled = upgradable === 0;
+  $("selUninstall").disabled = installed === 0;
+  $("selInstall").disabled = installable === 0;
+}
+
+/* ============================================================
+   渲染：任务
+   ============================================================ */
+// Which operations a task in each state can take. The same rule the executor
+// uses: a queued task can start or be dropped, a running one can only be
+// cancelled, a finished one can be retried or removed.
+function taskActions(t) {
+  const a = [];
+  if (t.state === "queued")
+    a.push({ id: "start", label: "开始", kind: "primary" });
+  if (t.state === "running")
+    a.push({ id: "cancel", label: "取消", kind: "danger" });
+  if (["failed", "cancelled", "interrupted"].includes(t.state))
+    a.push({ id: "retry", label: "重试", kind: "primary" });
+  if (t.state !== "running")
+    a.push({ id: "remove", label: "移除", kind: "" });
+  return a;
+}
+
+function renderTasks() {
+  $("tasksScroll").innerHTML = TASKS.map((t, i) => `
+    <div class="task ${state.taskSel === i ? "sel" : ""}" data-task="${i}">
+      <div class="t1">
+        <span class="tid">${t.id}</span>
+        <span class="badge ${t.mgr}">${t.mgr === "scoop" ? "Scoop" : "WinGet"}</span>
+        <span class="target">${esc(t.target)}</span>
+        <span class="scope">${esc(t.scope)}</span>
+        <span class="act">${t.act}</span>
+        <div class="spacer"></div>
+        <div class="tact">
+          ${taskActions(t).map(a =>
+            `<button class="btn ${a.kind}" data-taskact="${a.id}" data-taskidx="${i}">${a.label}</button>`
+          ).join("")}
+        </div>
+        <span class="state-badge ${t.cls}">${t.st}</span>
+      </div>
+      <div class="note ${t.state === "failed" ? "bad" : ""}">${esc(t.note)}</div>
+      <div class="phases">
+        ${t.phases.map((p, j) => {
+          const cls = t.phaseIdx > j ? "done" : t.phaseIdx === j ? "active" : "";
+          return `<span class="phase ${cls}">${p}</span>`
+            + (j < t.phases.length - 1 ? `<span class="phase-sep">›</span>` : "");
+        }).join("")}
+        <div class="spacer"></div>
+        <button class="logToggle" data-log="${t.id}">日志 ${t.log.length}</button>
+      </div>
+      <div class="log" id="log-${t.id}" style="display:none">
+        ${t.log.map(l => `<div class="ln ${l.kind}">
+          <span class="at">${l.at}</span><span class="ph">${l.ph}</span>
+          <span class="tx">${esc(l.tx)}${l.exit !== undefined ? `  [exit ${l.exit}]` : ""}</span>
+        </div>`).join("")}
+      </div>
+    </div>`).join("");
+
+  // Selecting a task row is separate from pressing its buttons: the row is what
+  // the details/status area refers to, the buttons act on it.
+  $("tasksScroll").querySelectorAll(".task").forEach(el => {
+    el.addEventListener("click", e => {
+      if (e.target.closest("button")) return;
+      state.taskSel = Number(el.dataset.task);
+      renderAll();
+    });
+  });
+  $("tasksScroll").querySelectorAll("[data-taskact]").forEach(b => {
+    b.addEventListener("click", e => {
+      e.stopPropagation();
+      const idx = Number(b.dataset.taskidx);
+      const act = b.dataset.taskact;
+      state.taskSel = idx;
+      const t = TASKS[idx];
+      setStatus(`任务 ${t.id}：${act}`);
+      renderAll();
+    });
+  });
+
+  $("tasksScroll").querySelectorAll(".logToggle").forEach(b => {
+    b.addEventListener("click", () => {
+      const el = $("log-" + b.dataset.log);
+      const open = el.style.display !== "none";
+      el.style.display = open ? "none" : "block";
+      b.textContent = open ? `日志 ${el.children.length}` : "收起";
+    });
+  });
+}
+
+/* ============================================================
+   渲染：右键菜单（改动 6）
+   ============================================================ */
+function openCtx(x, y, i) {
+  const rows = visibleRows();
+  const r = rows[i];
+  if (!r) return;
+  state.ctxRow = i;
+  const upgradable = r.avail && r.avail !== r.inst;
+  const installed = !!r.inst;
+  const menu = $("ctxMenu");
+  menu.innerHTML = `
+    <div class="hdr">${esc(r.name)}</div>
+    <div class="mi" data-act="detail">查看详情<span class="k">Enter</span></div>
+    <div class="mi" data-act="copy">复制精确 ID<span class="k">Ctrl+C</span></div>
+    <div class="sep"></div>
+    ${installed ? `
+      ${upgradable ? `<div class="mi" data-act="upgrade">升级到 ${esc(r.avail)}</div>` : ``}
+      <div class="mi danger" data-act="uninstall">卸载…</div>
+    ` : `
+      <div class="mi" data-act="install">安装…</div>
+    `}
+    <div class="mi" data-act="homepage">官网 / 项目页</div>
+    <div class="sep"></div>
+    <div class="mi" data-act="select">${state.checked.has(i) ? "移出选择" : "加入选择"}</div>`;
+  menu.classList.add("show");
+  const win = $("win").getBoundingClientRect();
+  const mw = menu.offsetWidth, mh = menu.offsetHeight;
+  let left = x - win.left, top = y - win.top;
+  if (left + mw > win.width - 6) left = win.width - mw - 6;
+  if (top + mh > win.height - 6) top = win.height - mh - 6;
+  menu.style.left = Math.max(6, left) + "px";
+  menu.style.top = Math.max(6, top) + "px";
+
+  menu.querySelectorAll(".mi").forEach(mi => {
+    if (mi.classList.contains("disabled")) return;
+    mi.addEventListener("click", () => {
+      const act = mi.dataset.act;
+      closeCtx();
+      if (act === "detail") { state.sel = i; renderAll(); }
+      else if (act === "copy") { navigator.clipboard?.writeText(r.id); setStatus(`已复制 ${r.id}`); }
+      else if (act === "homepage") setStatus(`打开项目页：${r.id}`);
+      else if (act === "upgrade") openReview("upgrade", i);
+      else if (act === "uninstall") openReview("uninstall", i);
+      else if (act === "install") openReview("install", i);
+      else if (act === "select") {
+        if (state.checked.has(i)) state.checked.delete(i); else state.checked.add(i);
+        renderAll();
+      }
+    });
+  });
+}
+function closeCtx() { $("ctxMenu").classList.remove("show"); }
+document.addEventListener("click", e => {
+  if (!$("ctxMenu").contains(e.target)) closeCtx();
+});
+
+/* ============================================================
+   审阅
+   ============================================================ */
+function openReview(action, i) {
+  const rows = visibleRows();
+  const r = rows[i ?? state.sel];
+  if (!r) return;
+  state.reviewAction = action;
+  state.agreed = false;
+  const upgradable = r.avail && r.avail !== r.inst;
+  const installed = !!r.inst;
+  const acts = [];
+  if (upgradable) acts.push({ id:"upgrade", label:"升级" });
+  if (installed) acts.push({ id:"uninstall", label:"卸载" });
+  if (acts.length === 0) acts.push({ id:"install", label:"安装" });
+  if (!acts.some(a => a.id === state.reviewAction)) state.reviewAction = acts[0].id;
+
+  $("rvActions").innerHTML = acts.map(a =>
+    `<button class="ap ${a.id === state.reviewAction ? "on" : ""}" data-a="${a.id}">${a.label}</button>`).join("");
+  $("rvActions").querySelectorAll(".ap").forEach(b =>
+    b.addEventListener("click", () => { state.reviewAction = b.dataset.a; state.agreed = false; openReview(state.reviewAction, i); }));
+
+  const un = state.reviewAction === "uninstall";
+  const inst = state.reviewAction === "install";
+  $("rvOp").textContent = state.reviewAction.toUpperCase();
+  const kv = [
+    ["管理器", r.mgr], ["来源", r.src], ["精确 ID", r.id], ["作用域", r.scope],
+    ["已装", r.inst || "未安装"],
+    ["目标", un ? "（移除本机版本）" : (r.avail || "—")],
+    ["方式", un ? `${r.mgr} uninstall --id … --exact`
+                : inst ? `${r.mgr} install --id … --exact`
+                       : `${r.mgr} upgrade --id … --exact`],
+    ["材料", un ? "无需下载材料（卸载只读本机状态）" : "由 backend 自行下载，插件不预取、不校验"],
+    ["结果核对", un ? "执行后重新读取已装列表；仍在列表中即视为卸载失败"
+                    : "执行后重新读取已装版本；与目标不一致即视为失败"]
+  ];
+  $("rvKv").innerHTML = kv.map(([k, v]) =>
+    `<div class="kv"><span class="k">${k}</span><span class="v">${esc(v)}</span></div>`).join("");
+  $("rvRisk").textContent = un
+    ? "卸载会移除本机软件，可能删除用户数据；不会自动重装，也不做本地备份。"
+    : "升级会替换已安装的文件；安装器失败时不做回滚。";
+  $("rvAgreeTitle").textContent = un ? "理解影响（impact acknowledgement）" : "源协议（source agreement）";
+  $("rvAgreeText").textContent = un
+    ? "卸载会移除本机软件，可能删除用户数据，且不会自动重装。"
+    : "包来自其声明的源；插件不下载、不校验材料。";
+  $("rvAgree").classList.toggle("on", state.agreed);
+  $("rvConfirm").disabled = !state.agreed;
+  $("rvHint").textContent = state.agreed ? "已确认 → 可以加入队列" : "未确认 → 确认按钮保持禁用";
+  $("reviewOverlay").style.display = "flex";
+}
+$("rvAgree").addEventListener("click", () => {
+  state.agreed = !state.agreed;
+  $("rvAgree").classList.toggle("on", state.agreed);
+  $("rvConfirm").disabled = !state.agreed;
+  $("rvHint").textContent = state.agreed ? "已确认 → 可以加入队列" : "未确认 → 确认按钮保持禁用";
+});
+$("rvCancel").addEventListener("click", () => { $("reviewOverlay").style.display = "none"; });
+$("rvConfirm").addEventListener("click", () => {
+  $("reviewOverlay").style.display = "none";
+  setStatus(`已加入队列：${state.reviewAction}`);
+});
+
+/* ============================================================
+   状态栏（改动 5：只有状态文字）
+   ============================================================ */
+function setStatus(t) { $("statusLine").textContent = t; }
+
+function renderStatus() {
+  if (state.searching) { setStatus("正在搜索…（Scoop 与 WinGet 并行查询）"); return; }
+  if (state.tab === "tasks") {
+    const running = TASKS.filter(t => t.state === "running").length;
+    const sel = state.taskSel >= 0 ? ` · 已选 ${TASKS[state.taskSel].id}` : "";
+    setStatus(`队列运行中 · ${running} 个进行中 · 退出码 0 不等于成功${sel}`);
+    return;
+  }
+  const rows = visibleRows();
+  const n = state.checked.size;
+  setStatus(`就绪 · ${rows.length} 项（${state.tab}）` + (n ? ` · 已选 ${n}` : ""));
+}
+
+/* ============================================================
+   过滤行可见性
+   ============================================================ */
+function renderFilterRow() {
+  const isInstalled = state.tab === "installed";
+  const isDiscover = state.tab === "discover";
+  $("srcLbl").style.display = isInstalled ? "" : "none";
+  $("sourceSeg").style.display = isInstalled ? "" : "none";
+  $("discLbl").style.display = isDiscover ? "" : "none";
+  $("discSeg").style.display = isDiscover ? "" : "none";
+  $("searchWrap").style.display = isDiscover ? "" : "none";
+}
+
+/* ============================================================
+   总渲染
+   ============================================================ */
+function renderAll() {
+  document.querySelectorAll(".tab").forEach(t =>
+    t.classList.toggle("on", t.dataset.tab === state.tab));
+  const isTasks = state.tab === "tasks";
+  $("body").style.display = isTasks ? "none" : "flex";
+  $("tasksPage").style.display = isTasks ? "flex" : "none";
+  $("filter").style.display = isTasks ? "none" : "flex";
+  $("selBar").style.display = isTasks ? "none" : "";
+  renderFilterRow();
+  if (isTasks) { renderTasks(); }
+  else { renderList(); renderDetail(); renderSelBar(); }
+  renderStatus();
+}
+
+/* ============================================================
+   事件
+   ============================================================ */
+document.querySelectorAll(".tab").forEach(t => {
+  t.addEventListener("click", () => {
+    state.tab = t.dataset.tab;
+    state.sel = -1;
+    state.checked.clear();
+    if (state.tab !== "discover") { state.search = ""; $("search").value = ""; }
+    renderAll();
+  });
+});
+
+// 管理器过滤是单选，不是多选：「全部 / Scoop / WinGet」三选一。
+// 多选（两个都点亮）会让"全部"变成一个既是选项又是两个选项之和的模糊状态，
+// 也让高亮不再表示"当前选了什么」。现在高亮永远只落在一个按钮上。
+$("backendSeg").querySelectorAll(".seg-btn").forEach(b => {
+  b.addEventListener("click", () => {
+    state.mgrFilter = b.dataset.mgr;
+    $("backendSeg").querySelectorAll(".seg-btn").forEach(x =>
+      x.classList.toggle("on", x.dataset.mgr === state.mgrFilter));
+    state.checked.clear();
+    state.sel = -1;
+    renderAll();
+  });
+});
+
+$("sourceSeg").querySelectorAll(".seg-btn").forEach(b => {
+  b.addEventListener("click", () => {
+    state.source = b.dataset.src;
+    $("sourceSeg").querySelectorAll(".seg-btn").forEach(x =>
+      x.classList.toggle("on", x.dataset.src === state.source));
+    state.checked.clear();
+    renderAll();
+  });
+});
+
+$("discSeg").querySelectorAll(".seg-btn").forEach(b => {
+  b.addEventListener("click", () => {
+    state.disc = b.dataset.disc;
+    $("discSeg").querySelectorAll(".seg-btn").forEach(x =>
+      x.classList.toggle("on", x.dataset.disc === state.disc));
+    state.checked.clear();
+    renderAll();
+  });
+});
+
+/* 改动 1：搜索动效 —— 输入后立刻进入 searching，骨架行 + spinner */
+let searchTimer = null;
+$("search").addEventListener("input", e => {
+  state.search = e.target.value.trim();
+  clearTimeout(searchTimer);
+  if (!state.search) { state.searching = false; $("searchWrap").classList.remove("busy"); renderAll(); return; }
+  state.searching = true;
+  $("searchWrap").classList.add("busy");
+  renderAll();
+  searchTimer = setTimeout(() => {
+    state.searching = false;
+    $("searchWrap").classList.remove("busy");
+    renderAll();
+  }, 900);
+});
+
+$("simSearch").addEventListener("click", () => {
+  state.tab = "discover";
+  state.search = "vim";
+  $("search").value = "vim";
+  state.searching = true;
+  $("searchWrap").classList.add("busy");
+  renderAll();
+  setTimeout(() => {
+    state.searching = false;
+    $("searchWrap").classList.remove("busy");
+    renderAll();
+  }, 1400);
+});
+
+$("selClear").addEventListener("click", () => { state.checked.clear(); renderAll(); });
+$("selUpgrade").addEventListener("click", () => {
+  const rows = visibleRows();
+  const i = [...state.checked].find(k => rows[k] && rows[k].avail && rows[k].avail !== rows[k].inst);
+  if (i !== undefined) openReview("upgrade", i);
+});
+$("selUninstall").addEventListener("click", () => {
+  const rows = visibleRows();
+  const i = [...state.checked].find(k => rows[k] && rows[k].inst);
+  if (i !== undefined) openReview("uninstall", i);
+});
+$("selInstall").addEventListener("click", () => {
+  const rows = visibleRows();
+  const i = [...state.checked].find(k => rows[k] && !rows[k].inst);
+  if (i !== undefined) openReview("install", i);
+});
+
+$("reviewBtn").addEventListener("click", () => openReview("upgrade", state.sel >= 0 ? state.sel : 0));
+$("refreshBtn").addEventListener("click", () => {
+  setStatus("正在刷新…（Scoop 与 WinGet 并行）");
+  setTimeout(() => renderAll(), 900);
+});
+$("settingsBtn").addEventListener("click", () => setStatus("设置：触发词 pkgs · 刷新间隔 · 显示观察行"));
+$("rescanBtn").addEventListener("click", () => setStatus("重新扫描已开始"));
+$("pauseBtn").addEventListener("click", () => {
+  const on = $("pauseBtn").textContent === "暂停队列";
+  $("pauseBtn").textContent = on ? "继续队列" : "暂停队列";
+  setStatus(on ? "队列已暂停：不再取下一个任务，正在跑的继续" : "队列已继续");
+});
+$("clearBtn").addEventListener("click", () => setStatus("已清空已完成的任务记录"));
+
+/* 主题 / 大小 */
+$("darkBtn").addEventListener("click", () => {
+  document.body.classList.toggle("dark");
+  $("darkBtn").classList.toggle("on", document.body.classList.contains("dark"));
+  $("darkBtn").textContent = document.body.classList.contains("dark") ? "浅色" : "深色";
+});
+const SIZES = {
+  dense:    { rowH:48, headerH:52, tabH:28, titleFont:16, bodyFont:14, captionFont:13, smallFont:11 },
+  compact:  { rowH:54, headerH:58, tabH:30, titleFont:17, bodyFont:15, captionFont:13, smallFont:11 },
+  standard: { rowH:60, headerH:64, tabH:32, titleFont:18, bodyFont:16, captionFont:14, smallFont:12 },
+  roomy:    { rowH:70, headerH:72, tabH:36, titleFont:20, bodyFont:17, captionFont:15, smallFont:13 }
+};
+function applySize(name) {
+  const s = SIZES[name] || SIZES.standard;
+  const r = document.documentElement.style;
+  r.setProperty("--rowH", s.rowH + "px");
+  r.setProperty("--headerH", s.headerH + "px");
+  r.setProperty("--tabH", s.tabH + "px");
+  r.setProperty("--titleFont", s.titleFont + "px");
+  r.setProperty("--bodyFont", s.bodyFont + "px");
+  r.setProperty("--captionFont", s.captionFont + "px");
+  r.setProperty("--smallFont", s.smallFont + "px");
+}
+$("sizeSel").addEventListener("change", e => applySize(e.target.value));
+
+/* 风格：只演示圆角差异（真实实现跟随宿主 nativeLook 全部 token） */
+const STYLES = {
+  fluent:  { cardR:6, ctlR:4, smallR:3 },
+  brand:   { cardR:10, ctlR:8, smallR:5 },
+  tactile: { cardR:2, ctlR:2, smallR:1 },
+  liquid:  { cardR:14, ctlR:12, smallR:8 }
+};
+$("styleSel").addEventListener("change", e => {
+  const s = STYLES[e.target.value] || STYLES.fluent;
+  const r = document.documentElement.style;
+  r.setProperty("--cardR", s.cardR + "px");
+  r.setProperty("--ctlR", s.ctlR + "px");
+  r.setProperty("--smallR", s.smallR + "px");
+});
+
+/* 启动 */
+applySize("standard");
+renderAll();
+</script>
+</body>
+</html>

@@ -1,0 +1,10 @@
+Name        Id                                    Version Match
+---------------------------------------------------------------------
+jq          jqlang.jq                             1.8.2   
+celq        IvanIsCoding.celq                     0.7.1   Tag: jq
+ajq         RicardoCabral.ajq                     0.1.5   Tag: jq
+DotNetJq    GtGOpen.DotNetJq                      1.0.0   
+jqweb       zafnz.jqweb                           0.9.0   
+PiliPlus    bggRGjQaUbCoE.PiliPlus                2.2.0.2 
+Markdownify amitmerchant1990.electron-markdownify 1.2.0   Tag: jquery
+TheDesk     Cutls.TheDesk                         24.2.1  Tag: jquery

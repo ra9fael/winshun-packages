@@ -1,0 +1,788 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>ra9fael.packages — 布局修复版 v2 交互演示</title>
+<style>
+  /* ============================================================
+     layout-v2 交互演示
+     目的：在写 QML 之前，用 HTML 精确演示修复后的布局结构。
+     修复要点（对应 QML 的改法）：
+       * 垂直方向 = 一个 flex 列：header / tabs / filter / evidence /
+         body(flex:1) / footer，每段高度固定或弹性，绝不互相叠画。
+       * QML 对应：ColumnLayout 的每个直接子项用 Layout.preferredHeight
+         （而不是 height:），body 用 Layout.fillHeight。
+       * 主题 = 宿主 nativeLook 唯一真值来源：4 风格 × 深浅色，
+         半透明 token 先合成到 background（与 theme_tokens.cpp 同规则）。
+     ============================================================ */
+  :root {
+    --bg:#F9F9F9; --layer:#F9F9F9; --page:#F3F3F3; --edge:#B4B4B4;
+    --divider:#E6E6E6; --text:#1B1B1B; --subtext:#666666; --faint:#8A8A8A;
+    --hover:#F0F0F0; --pressed:#E4E4E4; --tagfill:#F0F0F0;
+    --control:#FFFFFF; --controlHover:#F6F6F6; --controlBorder:#D5D5D5;
+    --accent:#0066CC; --accentFill:#0066CC; --accentLine:#0066CC; --accentText:#FFFFFF;
+    --danger:#C42B1C; --dangerFill:#C42B1C; --ok:#0F7B0F; --warn:#9D5D00;
+    --cardR:6px; --ctlR:4px; --smallR:3px;
+    --titleFont:18px; --bodyFont:16px; --captionFont:14px; --smallFont:12px;
+    --rowH:60px; --headerH:64px; --tabH:32px;
+    --font:"Segoe UI Variable Text","Microsoft YaHei UI",system-ui,sans-serif;
+    --mono:"Cascadia Mono",Consolas,monospace;
+  }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  html,body { height:100%; }
+  body { font-family:var(--font); background:#3a3a3e; color:var(--text);
+         display:flex; align-items:center; justify-content:center; padding:18px; }
+
+  /* ---------- 控制条（演示用，不属于插件 UI） ---------- */
+  #demoBar { position:fixed; top:0; left:0; right:0; height:44px; background:#1f1f23;
+             color:#ddd; display:flex; align-items:center; gap:10px; padding:0 14px;
+             font-size:12px; z-index:50; flex-wrap:nowrap; overflow-x:auto; }
+  #demoBar b { color:#fff; font-size:12px; white-space:nowrap; }
+  #demoBar select, #demoBar button { font-size:12px; padding:3px 8px; border-radius:4px;
+             border:1px solid #555; background:#2c2c31; color:#eee; cursor:pointer; white-space:nowrap; }
+  #demoBar button.on { background:#0066CC; border-color:#0066CC; color:#fff; }
+  #demoBar .sep { width:1px; height:20px; background:#444; }
+  #stage { margin-top:44px; width:100%; height:calc(100% - 44px);
+           display:flex; align-items:center; justify-content:center; }
+
+  /* ---------- 插件窗口 ---------- */
+  #win { width:980px; max-width:96%; height:720px; max-height:94%;
+         background:var(--bg); border:1px solid var(--edge); border-radius:8px;
+         display:flex; flex-direction:column; overflow:hidden;
+         box-shadow:0 18px 60px rgba(0,0,0,.5); }
+
+  /* ---- 1. 标题栏（固定高） ---- */
+  #titlebar { height:var(--headerH); flex:0 0 auto; background:var(--layer);
+              display:flex; align-items:center; gap:10px; padding:0 12px;
+              border-bottom:1px solid var(--divider); }
+  #titlebar .logo { width:20px; height:20px; border-radius:var(--ctlR);
+              background:var(--accentFill); color:var(--accentText); font-weight:700;
+              font-size:var(--captionFont); display:flex; align-items:center; justify-content:center; }
+  #titlebar .title { font-size:var(--bodyFont); font-weight:600; }
+  .chip { background:var(--tagfill); color:var(--subtext); font-size:var(--captionFont);
+          padding:2px 10px; border-radius:999px; white-space:nowrap; }
+  #titlebar .spacer { flex:1; }
+  .btn { background:var(--control); border:1px solid var(--controlBorder);
+         color:var(--text); font-size:var(--captionFont); font-family:var(--font);
+         padding:4px 14px; border-radius:var(--ctlR); cursor:pointer; }
+  .btn:hover { background:var(--controlHover); }
+  .btn.primary { background:var(--accentFill); border-color:var(--accentFill); color:var(--accentText); }
+  .btn.primary:disabled { opacity:.45; cursor:default; }
+  .btn:disabled { opacity:.45; cursor:default; }
+
+  /* ---- 2. 标签页（固定高） ---- */
+  #tabs { height:calc(var(--tabH) + 2px); flex:0 0 auto; background:var(--layer);
+          display:flex; align-items:stretch; padding:0 10px; gap:2px;
+          border-bottom:1px solid var(--divider); }
+  .tab { display:flex; align-items:center; padding:0 12px; font-size:var(--smallFont);
+         color:var(--subtext); cursor:pointer; position:relative; user-select:none; }
+  .tab:hover { background:var(--hover); }
+  .tab.on { color:var(--text); font-weight:600; }
+  .tab.on::after { content:""; position:absolute; left:0; right:0; bottom:0;
+                   height:2px; background:var(--accentLine); }
+
+  /* ---- 3. 过滤行（固定高） ---- */
+  #filter { height:calc(var(--tabH) + 6px); flex:0 0 auto; background:var(--layer);
+            display:flex; align-items:center; gap:8px; padding:0 12px;
+            border-bottom:1px solid var(--divider); }
+  #filter .lbl { color:var(--faint); font-size:var(--captionFont); white-space:nowrap; }
+  /* 管理器多选：分段按钮，点一下即切换，不展开下拉 */
+  .seg-ctl { display:flex; align-items:center; gap:2px; background:var(--tagfill);
+             border:1px solid var(--controlBorder); border-radius:var(--ctlR);
+             padding:2px; flex:0 0 auto; }
+  .seg-btn { font-size:var(--captionFont); font-family:var(--font); color:var(--subtext);
+             background:transparent; border:none; border-radius:calc(var(--ctlR) - 1px);
+             padding:2px 10px; cursor:pointer; white-space:nowrap; line-height:1.5; }
+  .seg-btn:hover { background:var(--hover); }
+  .seg-btn.on { background:var(--accentFill); color:var(--accentText); font-weight:600; }
+  .seg-btn.on:hover { background:var(--accentFill); }
+  .seg-btn.muted { background:var(--pressed); color:var(--text); }
+  #search { flex:1; min-width:120px; background:var(--control); border:1px solid var(--controlBorder);
+            color:var(--text); font-size:var(--captionFont); font-family:var(--font);
+            padding:4px 10px; border-radius:var(--ctlR); outline:none; }
+  #search:focus { border-color:var(--accentLine); }
+  #search::placeholder { color:var(--faint); }
+  #filter .hint { color:var(--faint); font-size:var(--captionFont); white-space:nowrap; }
+
+  /* ---- 4. 证据条（固定高） ---- */
+  #evidence { height:calc(var(--smallFont) + 16px); flex:0 0 auto; background:var(--page);
+              display:flex; align-items:center; padding:0 12px; gap:6px;
+              border-bottom:1px solid var(--divider);
+              color:var(--faint); font-size:var(--smallFont);
+              white-space:nowrap; overflow:hidden; }
+  #evidence .mono { font-family:var(--mono); }
+
+  /* ---- 5. 主体（flex:1，内部左右分栏） ---- */
+  #body { flex:1 1 auto; min-height:0; display:flex; }
+  #listPane { flex:1 1 auto; min-width:320px; display:flex; flex-direction:column; min-width:0; }
+  #listHead { height:calc(var(--smallFont) + 12px); flex:0 0 auto; background:var(--page);
+              display:flex; align-items:center; padding-left:34px;
+              border-bottom:1px solid var(--divider);
+              color:var(--faint); font-size:var(--smallFont); }
+  #listScroll { flex:1 1 auto; min-height:0; overflow-y:auto; position:relative; }
+  #statePane { display:none; flex:1 1 auto; flex-direction:column; align-items:center;
+               justify-content:center; gap:8px; padding:20px; text-align:center; }
+  #statePane .st-title { font-size:var(--titleFont); font-weight:600; }
+  #statePane .st-body { font-size:var(--captionFont); color:var(--subtext); max-width:420px; }
+  #statePane .st-why { font-size:var(--smallFont); color:var(--faint); font-family:var(--mono); max-width:520px; }
+
+  .row { height:var(--rowH); flex:0 0 auto; display:flex; align-items:center;
+         position:relative; cursor:pointer; border-bottom:1px solid var(--divider); }
+  .row:hover { background:var(--hover); }
+  .row.sel { background:var(--accentFill); background:color-mix(in srgb, var(--accentFill) 14%, transparent); }
+  .row.sel::before { content:""; position:absolute; left:0; top:0; bottom:0; width:2px; background:var(--accentLine); }
+  .row .cb { width:14px; height:14px; margin:0 8px 0 12px; border:1px solid var(--controlBorder);
+             border-radius:var(--smallR); background:var(--control); flex:0 0 auto;
+             display:flex; align-items:center; justify-content:center;
+             font-size:10px; color:var(--accentText); }
+  .row.checked .cb { background:var(--accentFill); border-color:var(--accentFill); }
+  .row .cb::after { content:"✓"; visibility:hidden; }
+  .row.checked .cb::after { visibility:visible; }
+  .row .main { flex:1; min-width:0; display:flex; flex-direction:column;
+               justify-content:center; gap:3px; padding-right:12px; }
+  .row .l1 { display:flex; align-items:baseline; gap:8px; min-width:0; }
+  .row .name { font-size:var(--bodyFont); font-weight:600; white-space:nowrap;
+               overflow:hidden; text-overflow:ellipsis; max-width:45%; }
+  .row .id { font-family:var(--mono); font-size:var(--smallFont); color:var(--subtext);
+             white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .row .l2 { display:flex; align-items:center; gap:8px; font-size:var(--smallFont);
+             color:var(--subtext); white-space:nowrap; overflow:hidden; }
+  .badge { font-size:var(--smallFont); padding:0 6px; border-radius:999px;
+           border:1px solid currentColor; line-height:calc(var(--smallFont) + 5px); }
+  .badge.scoop { color:#2b6f8f; } .badge.winget { color:#2f6b3a; }
+  .row .l2 .mono { font-family:var(--mono); }
+  .row .l2 .ok { color:var(--ok); } .row .l2 .warn { color:var(--warn); }
+
+  #splitter { width:5px; flex:0 0 auto; cursor:col-resize; background:transparent; }
+  #detailPane { width:330px; flex:0 0 auto; background:var(--page); border-left:1px solid var(--divider);
+                overflow-y:auto; padding:12px; }
+  #detailPane h3 { font-size:var(--bodyFont); font-weight:600; margin-bottom:2px;
+                   white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  #detailPane .prov { font-size:var(--smallFont); color:var(--faint); margin-bottom:10px; }
+  .kv { display:flex; gap:8px; padding:2px 0; font-size:var(--smallFont); }
+  .kv .k { width:74px; flex:0 0 auto; color:var(--faint); }
+  .kv .v { font-family:var(--mono); color:var(--text); white-space:nowrap;
+           overflow:hidden; text-overflow:ellipsis; }
+  #detailEmpty { color:var(--faint); font-size:var(--captionFont); line-height:1.6; }
+
+  /* ---- 6. 任务页（替代主体） ---- */
+  #tasksPage { display:none; flex:1 1 auto; min-height:0; flex-direction:column; }
+  #tasksHead { height:calc(var(--smallFont) + 12px); flex:0 0 auto; background:var(--page);
+               display:flex; align-items:center; gap:16px; padding:0 12px;
+               border-bottom:1px solid var(--divider);
+               color:var(--faint); font-size:var(--smallFont); }
+  #tasksScroll { flex:1 1 auto; min-height:0; overflow-y:auto; }
+  .task { padding:10px 12px; border-bottom:1px solid var(--divider); }
+  .task .t1 { display:flex; align-items:center; gap:10px; font-size:var(--captionFont); }
+  .task .tid { color:var(--faint); }
+  .task .target { font-family:var(--mono); font-weight:600; }
+  .task .scope, .task .act { color:var(--subtext); font-size:var(--smallFont); }
+  .task .spacer { flex:1; }
+  .state-badge { font-size:var(--smallFont); padding:1px 8px; border-radius:999px;
+                 border:1px solid currentColor; }
+  .st-running { color:var(--accentLine); } .st-wait { color:var(--warn); }
+  .st-ok { color:var(--ok); } .st-fail { color:var(--danger); }
+  .task .note { margin-top:4px; font-size:var(--captionFont); color:var(--subtext); }
+  .task .note.bad { color:var(--danger); }
+  .task .bar { margin-top:6px; width:90px; height:3px; border-radius:2px;
+               background:var(--tagfill); overflow:hidden; position:relative; }
+  .task .bar i { position:absolute; top:0; bottom:0; width:35%; border-radius:2px;
+                 background:var(--accentLine); animation:slide 1.4s linear infinite; }
+  @keyframes slide { from { left:-35%; } to { left:100%; } }
+  .task .stage { margin-top:4px; font-size:var(--smallFont); color:var(--faint); font-family:var(--mono); }
+  #tasksFoot { height:calc(var(--tabH) + 2px); flex:0 0 auto; background:var(--layer);
+               border-top:1px solid var(--divider); display:flex; align-items:center;
+               gap:10px; padding:0 12px; font-size:var(--captionFont); }
+  #tasksFoot .sub { color:var(--faint); font-size:var(--smallFont); }
+
+  /* ---- 7. 页脚（固定高） ---- */
+  #footer { height:calc(var(--tabH) + 2px); flex:0 0 auto; background:var(--layer);
+            border-top:1px solid var(--divider); display:flex; align-items:center;
+            gap:12px; padding:0 12px; }
+  #footer .status { color:var(--subtext); font-size:var(--captionFont); white-space:nowrap;
+                    overflow:hidden; text-overflow:ellipsis; }
+  #footer .selcount { color:var(--subtext); font-size:var(--captionFont); white-space:nowrap; }
+  #footer .spacer { flex:1; }
+
+  /* ---- 审阅对话框（覆盖层） ---- */
+  #reviewOverlay { display:none; position:absolute; inset:0; z-index:20;
+                   background:rgba(0,0,0,.55); align-items:center; justify-content:center; }
+  #review { width:560px; max-width:92%; max-height:88%; background:var(--layer);
+            border:1px solid var(--edge); border-radius:var(--cardR);
+            display:flex; flex-direction:column; overflow:hidden; }
+  #reviewHead { height:calc(var(--tabH) + 6px); flex:0 0 auto; display:flex; align-items:center;
+                gap:8px; padding:0 14px; border-bottom:1px solid var(--divider); }
+  #reviewHead .op { background:var(--accentFill); color:var(--accentText); font-size:var(--smallFont);
+                    font-weight:600; padding:1px 8px; border-radius:var(--smallR); }
+  #reviewHead .rt { font-size:var(--smallFont); font-weight:600; }
+  #reviewBody { flex:1 1 auto; min-height:0; overflow-y:auto; padding:12px 14px; }
+  #reviewBody .blocked { color:var(--danger); font-size:var(--captionFont); margin-bottom:8px; }
+  #reviewBody .risk { color:var(--danger); font-size:var(--captionFont); margin-top:8px; }
+  .agree { border:1px solid var(--warn); border-radius:var(--ctlR); background:var(--control);
+           padding:8px 10px; margin-top:8px; display:flex; gap:8px; align-items:flex-start; }
+  .agree.agreed { border-color:var(--controlBorder); }
+  .agree input { margin-top:3px; }
+  .agree .at { font-size:var(--captionFont); font-weight:600; }
+  .agree .ad { font-size:var(--smallFont); color:var(--faint); }
+  #reviewFoot { flex:0 0 auto; border-top:1px solid var(--divider); background:var(--page);
+                display:flex; align-items:center; gap:8px; padding:8px 14px; }
+  #reviewFoot .gate { flex:1; font-size:var(--smallFont); color:var(--faint);
+                      white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  #reviewFoot .gate.ready { color:var(--ok); }
+
+  /* ---- 设置弹窗（覆盖层） ---- */
+  #settingsOverlay { display:none; position:absolute; inset:0; z-index:20;
+                     background:rgba(0,0,0,.45); align-items:center; justify-content:center; }
+  #settings { width:440px; max-width:92%; background:var(--layer);
+              border:1px solid var(--edge); border-radius:var(--cardR);
+              padding:14px; display:flex; flex-direction:column; gap:8px; }
+  #settings .st { font-size:var(--bodyFont); font-weight:600; }
+  #settings .sd { font-size:var(--captionFont); color:var(--subtext); line-height:1.6;
+                  overflow-wrap:break-word; }
+  #settings .sb { font-size:var(--smallFont); color:var(--faint); font-family:var(--mono);
+                  overflow-wrap:anywhere; }
+  #settings .sf { display:flex; justify-content:flex-end; margin-top:4px; }
+  #win.annotating .seg { outline:1px dashed rgba(255,0,128,.9); outline-offset:-1px; }
+  #win.annotating .seg::before { content:attr(data-seg); position:absolute; right:4px; top:2px;
+      font-size:10px; color:#fff; background:rgba(255,0,128,.85); padding:0 5px;
+      border-radius:3px; z-index:5; font-family:Consolas,monospace; }
+  #titlebar,#tabs,#filter,#evidence,#body,#footer,#listHead,#detailPane,#tasksHead,#tasksFoot
+    { position:relative; }
+  #win.annotating #body::before { content:"flex:1（占满剩余）"; position:absolute; left:50%;
+      top:50%; transform:translate(-50%,-50%); font-size:11px; color:#fff;
+      background:rgba(255,0,128,.85); padding:2px 8px; border-radius:4px; z-index:6;
+      font-family:Consolas,monospace; pointer-events:none; }
+
+  /* ---------- 滚动条 ---------- */
+  ::-webkit-scrollbar { width:10px; height:10px; }
+  ::-webkit-scrollbar-thumb { background:var(--controlBorder); border-radius:5px; }
+  ::-webkit-scrollbar-track { background:transparent; }
+</style>
+</head>
+<body>
+
+<div id="demoBar">
+  <b>布局 v2 演示</b>
+  <span class="sep"></span>
+  <label>风格</label>
+  <select id="styleSel">
+    <option value="fluent">fluent</option>
+    <option value="brand">brand</option>
+    <option value="tactile">tactile</option>
+    <option value="liquid">liquid</option>
+  </select>
+  <button id="darkBtn">深色</button>
+  <label>界面大小</label>
+  <select id="sizeSel">
+    <option value="dense">dense（紧凑）</option>
+    <option value="compact">compact</option>
+    <option value="standard" selected>standard</option>
+    <option value="roomy">roomy（宽松）</option>
+  </select>
+  <span class="sep"></span>
+  <button id="annotBtn">布局注解</button>
+  <button id="reviewBtn">打开审阅对话框</button>
+  <span style="color:#888;font-size:11px;">垂直方向 = 固定条 + flex:1 主体，任何窗口高度都不重叠</span>
+</div>
+
+<div id="stage">
+<div id="win">
+
+  <!-- 1. 标题栏 -->
+  <div id="titlebar" class="seg" data-seg="header 固定高">
+    <div class="logo">P</div>
+    <div class="title">软件包</div>
+    <div class="chip">普通权限 · 未提权</div>
+    <div class="spacer"></div>
+    <button class="btn" id="refreshBtn">刷新</button>
+    <button class="btn" id="settingsBtn">设置</button>
+  </div>
+
+  <!-- 2. 标签页 -->
+  <div id="tabs" class="seg" data-seg="tabs 固定高">
+    <div class="tab on" data-tab="installed">已安装</div>
+    <div class="tab" data-tab="discover">发现</div>
+    <div class="tab" data-tab="updates">更新</div>
+    <div class="tab" data-tab="tasks">任务 <span id="taskCount"></span></div>
+  </div>
+
+  <!-- 3. 过滤行 -->
+  <div id="filter" class="seg" data-seg="filter 固定高">
+    <span class="lbl">管理器</span>
+    <div class="seg-ctl" id="backendSeg">
+      <button class="seg-btn on" data-mgr="all">全部</button>
+      <button class="seg-btn" data-mgr="scoop">Scoop</button>
+      <button class="seg-btn" data-mgr="winget">WinGet</button>
+    </div>
+    <input id="search" placeholder="搜索包名或精确 ID（只查询，不安装）">
+    <span class="hint">Enter 查看详情</span>
+  </div>
+
+  <!-- 4. 证据条 -->
+  <div id="evidence" class="seg" data-seg="evidence 固定高">
+    <span id="scanLine">扫描于 14:32:07 · 2 个管理器</span>&nbsp;·&nbsp;
+    <span class="mono" id="backendLine">scoop 0.5.3 ✓ · winget 1.29.380 ✓</span>
+  </div>
+
+  <!-- 5. 主体：列表 + 详情 -->
+  <div id="body" class="seg" data-seg="body">
+    <div id="listPane">
+      <div id="listHead" class="seg" data-seg="list header">名称 / 精确 ID</div>
+      <div id="statePane">
+        <div class="st-title" id="stTitle"></div>
+        <div class="st-body" id="stBody"></div>
+        <div class="st-why" id="stWhy"></div>
+      </div>
+      <div id="listScroll"></div>
+    </div>
+    <div id="splitter" title="拖动分栏（演示）"></div>
+    <div id="detailPane" class="seg" data-seg="details">
+      <div id="detailEmpty">从左侧选择一项，查看完整身份、来源证据、依赖与能力限制。查询不会安装任何东西。</div>
+      <div id="detailBody" style="display:none">
+        <h3 id="dName"></h3>
+        <div class="prov" id="dProv"></div>
+        <div id="dKv"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 5b. 任务页 -->
+  <div id="tasksPage" class="seg" data-seg="tasks">
+    <div id="tasksHead" class="seg" data-seg="tasks header">
+      <span>#</span><span>管理器</span><span>精确目标 / 作用域</span><span>状态</span>
+    </div>
+    <div id="tasksScroll"></div>
+    <div id="tasksFoot" class="seg" data-seg="tasks footer">
+      <span>日志</span>
+      <span class="sub">只保留脱敏的阶段、退出码与错误片段</span>
+    </div>
+  </div>
+
+  <!-- 6. 页脚 -->
+  <div id="footer" class="seg" data-seg="footer 固定高">
+    <span class="status" id="statusLine">就绪 · 379 项（WinGet 379 · Scoop 42）</span>
+    <span class="selcount">已选 <span id="selCount">0</span></span>
+    <div class="spacer"></div>
+    <button class="btn primary" id="reviewOpenBtn" disabled>审阅所选操作…</button>
+  </div>
+
+  <!-- 设置弹窗 -->
+  <div id="settingsOverlay">
+    <div id="settings">
+      <div class="st">设置</div>
+      <div class="sd">本窗口只展示 backend 路径、版本与适配状态。来源、bucket 与 pin/hold 的管理不在本版本内；本插件不会下载包管理器、自动同意任何协议或自动提权。</div>
+      <div class="sb" id="settingsBackend">scoop 0.5.3 ✓ · winget 1.29.380 ✓</div>
+      <div class="sf"><button class="btn" onclick="closeSettings()">关闭</button></div>
+    </div>
+  </div>
+
+  <!-- 审阅对话框 -->
+  <div id="reviewOverlay">
+    <div id="review">
+      <div id="reviewHead">
+        <span class="op" id="rvOp">uninstall</span>
+        <span class="rt">审阅操作</span>
+      </div>
+      <div id="reviewBody">
+        <div class="blocked" id="rvBlocked" style="display:none"></div>
+        <div id="rvKv"></div>
+        <div class="risk" id="rvRisk"></div>
+        <label class="agree" id="agreeSrc">
+          <input type="checkbox" id="ckSrc">
+          <span><span class="at">源协议（source agreement）</span><br>
+          <span class="ad">我已了解该来源的协议与条款；本插件不会自动同意任何协议。</span></span>
+        </label>
+        <label class="agree" id="agreeIns">
+          <input type="checkbox" id="ckIns">
+          <span><span class="at">安装器协议（installer agreement）</span><br>
+          <span class="ad">我已了解该包的安装器行为；本插件不会静默接受协议。</span></span>
+        </label>
+      </div>
+      <div id="reviewFoot">
+        <span class="gate" id="rvGate">勾选全部协议后才能确认</span>
+        <button class="btn" onclick="closeReview()">取消</button>
+        <button class="btn primary" id="rvConfirm" disabled>确认并加入队列</button>
+      </div>
+    </div>
+  </div>
+
+</div>
+</div>
+
+<script>
+/* ============================================================
+   主题：与 theme_tokens.cpp 同规则的 JS 版
+   —— 宿主 nativeLook 是唯一真值来源；半透明 token 先合成到
+      background（src-over），结果永远不透明。
+   ============================================================ */
+const LOOKS = {
+  fluent: {
+    cardRadius:6, controlRadius:4, smallControlRadius:3,
+    light:{ background:"#F9F9F9", layer:"#F9F9F9", page:"#F3F3F3", windowEdge:"#B4B4B4",
+      divider:"#0F000000", text:"#1B1B1B", subtext:"#666666", faint:"#8A8A8A",
+      hover:"#09000000", pressed:"#12000000", tagFill:"#0D000000", control:"#FFFFFF",
+      controlHover:"#F6F6F6", controlBorder:"#D5D5D5", inputFocused:"#FFFFFF",
+      menuBackground:"#F9F9F9", menuHover:"#ECECEC", menuEdge:"#1A000000",
+      accent:"#0066CC", accentFill:"#0066CC", accentLine:"#0066CC", accentText:"#FFFFFF",
+      textSelection:"#4D0066CC", danger:"#C42B1C", dangerFill:"#C42B1C" },
+    dark:{ background:"#202020", layer:"#202020", page:"#202020", windowEdge:"#6A6A6A",
+      divider:"#15FFFFFF", text:"#F3F3F3", subtext:"#B8B8B8", faint:"#8A8A8A",
+      hover:"#0DFFFFFF", pressed:"#17FFFFFF", tagFill:"#12FFFFFF", control:"#373737",
+      controlHover:"#3C3C3C", controlBorder:"#444444", inputFocused:"#1F1F1F",
+      menuBackground:"#2C2C2C", menuHover:"#3A3A3A", menuEdge:"#17FFFFFF",
+      accent:"#B8B8B8", accentFill:"#0066CC", accentLine:"#B8B8B8", accentText:"#FFFFFF",
+      textSelection:"#4D0066CC", danger:"#FF99A4", dangerFill:"#C42B1C" }
+  },
+  brand: {
+    cardRadius:10, controlRadius:6, smallControlRadius:4,
+    light:{ background:"#FDFCFD", layer:"#FAF9FA", page:"#FAF9FA", windowEdge:"#B4B4B4",
+      divider:"#13FF0000", text:"#1B1B20", subtext:"#5C5C66", faint:"#8A8A93",
+      hover:"#0A000000", pressed:"#12000000", tagFill:"#0B000000", control:"#FFFFFF",
+      controlHover:"#F7F7F9", controlBorder:"#24000000", inputFocused:"#FFFFFF",
+      menuBackground:"#FFFFFF", menuHover:"#F7F7F9", menuEdge:"#14000000",
+      accent:"#1B1B20", accentFill:"#A8402C", accentLine:"#A8402C", accentText:"#FFFFFF",
+      textSelection:"#4DA8402C", danger:"#D2363E", dangerFill:"#C42F38" },
+    dark:{ background:"#202024", layer:"#202024", page:"#202024", windowEdge:"#6A6A6A",
+      divider:"#14FFFFFF", text:"#F2F2F5", subtext:"#B6B6BF", faint:"#8C8C96",
+      hover:"#0DFFFFFF", pressed:"#14FFFFFF", tagFill:"#12FFFFFF", control:"#2B2B31",
+      controlHover:"#31313A", controlBorder:"#24FFFFFF", inputFocused:"#232328",
+      menuBackground:"#2F2F35", menuHover:"#31313A", menuEdge:"#14FFFFFF",
+      accent:"#F2F2F5", accentFill:"#A8402C", accentLine:"#F2F2F5", accentText:"#FFFFFF",
+      textSelection:"#4DA8402C", danger:"#FF7A80", dangerFill:"#C42F38" }
+  },
+  tactile: {
+    cardRadius:8, controlRadius:6, smallControlRadius:4,
+    light:{ background:"#F3EFE9", layer:"#00000000", page:"#F3EFE9", windowEdge:"#B4B4B4",
+      divider:"#15643C14", text:"#1F1B16", subtext:"#554F46", faint:"#6B645A",
+      hover:"#08643C14", pressed:"#0F643C14", tagFill:"#0F643C14", control:"#FFFFFF",
+      controlHover:"#FFFFFF", controlBorder:"#24643C14", inputFocused:"#ECE8E1",
+      menuBackground:"#FFFEFC", menuHover:"#FFFFFF", menuEdge:"#12643C14",
+      accent:"#B13D08", accentFill:"#C2410C", accentLine:"#F2600F", accentText:"#FFFFFF",
+      textSelection:"#4DF2600F", danger:"#C2362F", dangerFill:"#B42D26" },
+    dark:{ background:"#2A2A2D", layer:"#00000000", page:"#2A2A2D", windowEdge:"#6A6A6A",
+      divider:"#42000000", text:"#F3F1ED", subtext:"#C9C4BC", faint:"#B0ABA3",
+      hover:"#08000000", pressed:"#0DFFFFFF", tagFill:"#12FFFFFF", control:"#55555B",
+      controlHover:"#55555B", controlBorder:"#66000000", inputFocused:"#202022",
+      menuBackground:"#3B3B3F", menuHover:"#55555B", menuEdge:"#48000000",
+      accent:"#FFA36B", accentFill:"#C2410C", accentLine:"#FF7A30", accentText:"#FFFFFF",
+      textSelection:"#4DF2600F", danger:"#FF8078", dangerFill:"#B42D26" }
+  },
+  liquid: {
+    cardRadius:10, controlRadius:6, smallControlRadius:4,
+    light:{ background:"#F3F3F3", layer:"#80FFFFFF", page:"#F3F3F3", windowEdge:"#BEBEBE",
+      divider:"#12000000", text:"#1A1A1A", subtext:"#525252", faint:"#686868",
+      hover:"#09000000", pressed:"#0E000000", tagFill:"#E9E9E9", control:"#FFFFFF",
+      controlHover:"#FAFAFA", controlBorder:"#24000000", inputFocused:"#FFFFFF",
+      menuBackground:"#F9F9F9", menuHover:"#EBEBEB", menuEdge:"#24000000",
+      accent:"#A8402C", accentFill:"#A8402C", accentLine:"#A8402C", accentText:"#FFFFFF",
+      textSelection:"#4DA8402C", danger:"#B4232F", dangerFill:"#B4232F" },
+    dark:{ background:"#202020", layer:"#661F1F1F", page:"#202020", windowEdge:"#555555",
+      divider:"#12FFFFFF", text:"#F5F5F5", subtext:"#C5C5C5", faint:"#A3A3A3",
+      hover:"#0DFFFFFF", pressed:"#09000000", tagFill:"#3A3A3A", control:"#383838",
+      controlHover:"#404040", controlBorder:"#1FFFFFFF", inputFocused:"#252525",
+      menuBackground:"#2C2C2C", menuHover:"#3B3B3B", menuEdge:"#1FFFFFFF",
+      accent:"#B8B8B8", accentFill:"#A8402C", accentLine:"#B8B8B8", accentText:"#FFFFFF",
+      textSelection:"#4DA8402C", danger:"#FFABB3", dangerFill:"#B4232F" }
+  }
+};
+
+/* 界面大小四档 = 宿主 UiScale.qml 原表 */
+const SIZES = {
+  dense:    { titleFont:14, bodyFont:13, captionFont:12, smallFont:11, rowHeight:32, headerHeight:44, tabH:26 },
+  compact:  { titleFont:16, bodyFont:14, captionFont:13, smallFont:11, rowHeight:44, headerHeight:56, tabH:28 },
+  standard: { titleFont:18, bodyFont:16, captionFont:14, smallFont:12, rowHeight:60, headerHeight:64, tabH:32 },
+  roomy:    { titleFont:20, bodyFont:18, captionFont:15, smallFont:13, rowHeight:68, headerHeight:72, tabH:36 }
+};
+
+function parseColor(s) {           // "#AARRGGBB" | "#RRGGBB"
+  const h = s.replace("#","");
+  if (h.length === 8) return [parseInt(h.slice(0,2),16), parseInt(h.slice(2,4),16), parseInt(h.slice(4,6),16), parseInt(h.slice(6,8),16)];
+  if (h.length === 6) return [255, parseInt(h.slice(0,2),16), parseInt(h.slice(2,4),16), parseInt(h.slice(4,6),16)];
+  return [255,0,0,0];
+}
+function rgba(c){ return `rgba(${c[1]},${c[2]},${c[3]},${(c[0]/255).toFixed(3)})`; }
+function composite(src, dst) {     // src-over，结果不透明（与 C++ 同式）
+  const sa = src[0]/255, da = dst[0]/255, oa = sa + da*(1-sa);
+  if (oa === 0) return [255,0,0,0];
+  const ch = i => Math.round((src[i]*sa + dst[i]*da*(1-sa)) / oa);
+  return [255, ch(1), ch(2), ch(3)];
+}
+function hex(c){ return "#"+c.slice(1).map(v=>v.toString(16).padStart(2,"0")).join(""); }
+
+function applyTheme(styleName, dark, sizeName) {
+  const look = LOOKS[styleName][dark ? "dark" : "light"];
+  const bg = parseColor(look.background);
+  const r = document.documentElement.style;
+  const set = (name, key) => {
+    const c = parseColor(look[key]);
+    // 半透明 token（layer/hover/pressed/tagFill/divider 等）先合成到 background
+    const out = c[0] === 255 ? c : composite(c, bg);
+    r.setProperty(name, hex(out));
+  };
+  r.setProperty("--bg", hex(bg));
+  ["layer","page","windowEdge","divider","text","subtext","faint","hover","pressed",
+   "tagfill:tagFill","control","controlHover","controlBorder","inputFocused",
+   "accent","accentFill","accentLine","accentText","danger","dangerFill"]
+   .forEach(pair => { const [v,k] = pair.split(":"); set("--"+v, k || pair); });
+  r.setProperty("--ok",  dark ? "#6CCB5F" : "#0F7B0F");   // nativeLook 没有，按 dark 自算
+  r.setProperty("--warn",dark ? "#D9A62E" : "#9D5D00");
+  r.setProperty("--cardR", LOOKS[styleName].cardRadius+"px");
+  r.setProperty("--ctlR",  LOOKS[styleName].controlRadius+"px");
+  r.setProperty("--smallR",LOOKS[styleName].smallControlRadius+"px");
+  const s = SIZES[sizeName];
+  r.setProperty("--titleFont", s.titleFont+"px"); r.setProperty("--bodyFont", s.bodyFont+"px");
+  r.setProperty("--captionFont", s.captionFont+"px"); r.setProperty("--smallFont", s.smallFont+"px");
+  r.setProperty("--rowH", s.rowHeight+"px"); r.setProperty("--headerH", s.headerHeight+"px");
+  r.setProperty("--tabH", s.tabH+"px");
+}
+
+/* ============================================================
+   演示数据（与 grab_window 一致的形状）
+   ============================================================ */
+const ROWS = [
+  { name:"ripgrep", id:"BurntSushi.ripgrep.MSVC", mgr:"winget", src:"winget", scope:"User",
+    inst:"14.1.0", avail:"14.1.2", prov:"backend-recorded", hold:"", dup:"" },
+  { name:"ripgrep", id:"ripgrep", mgr:"scoop", src:"main", scope:"User",
+    inst:"14.1.0", avail:"14.1.0", prov:"backend-recorded", hold:"", dup:"WinGet" },
+  { name:"Microsoft Visual Studio Code", id:"9NBLGGH4NNS1", mgr:"winget", src:"msstore", scope:"Machine",
+    inst:"1.21.2911", avail:"1.96.4", prov:"observed", hold:"", dup:"" },
+  { name:"Git", id:"Git.Git", mgr:"winget", src:"winget", scope:"User",
+    inst:"2.47.1", avail:"2.51.0", prov:"backend-recorded", hold:"", dup:"" },
+  { name:"7zip", id:"7zip", mgr:"scoop", src:"main", scope:"User",
+    inst:"24.09", avail:"25.01", prov:"backend-recorded", hold:"held（用户保持）", dup:"" },
+  { name:"PowerToys", id:"Microsoft.PowerToys", mgr:"winget", src:"winget", scope:"User",
+    inst:"0.87.1", avail:"0.91.1", prov:"backend-recorded", hold:"", dup:"" },
+  { name:"fzf", id:"fzf", mgr:"scoop", src:"main", scope:"User",
+    inst:"0.57.0", avail:"0.62.0", prov:"backend-recorded", hold:"", dup:"" },
+  { name:"Windows Terminal", id:"Microsoft.WindowsTerminal", mgr:"winget", src:"winget", scope:"User",
+    inst:"1.22.11141", avail:"1.23.12345", prov:"backend-recorded", hold:"", dup:"" },
+  { name:"nodejs-lts", id:"nodejs-lts", mgr:"scoop", src:"main", scope:"User",
+    inst:"22.14.0", avail:"22.20.0", prov:"backend-recorded", hold:"", dup:"" },
+  { name:"Everything", id:"voidtools.Everything", mgr:"winget", src:"winget", scope:"Machine",
+    inst:"1.4.1.1028", avail:"1.4.1.1028", prov:"observed", hold:"", dup:"" }
+];
+const TASKS = [
+  { id:"T-01", mgr:"winget", target:"Git.Git", scope:"User", act:"upgrade",
+    state:"running", st:"运行中", note:"正在下载 2.51.0（不自动同意协议）", indet:true, stage:"download" },
+  { id:"T-02", mgr:"scoop", target:"7zip", scope:"User", act:"uninstall",
+    state:"waiting", st:"等待中", note:"前一任务（winget 通道）结束后开始", indet:false, stage:"" },
+  { id:"T-03", mgr:"winget", target:"Microsoft.PowerToys", scope:"User", act:"reinstall",
+    state:"partial", st:"部分失败", note:"卸载已完成，安装失败——包可能已不在机器上；请先查看再决定", indet:false, stage:"install → exit 0x8A15002B" }
+];
+
+let sel = -1, checked = new Set(), searchText = "";
+// 管理器过滤是多选：{scoop, winget} 两个布尔。两个都选 = 全部。
+let mgrFilter = { scoop: true, winget: true };
+
+function esc(s){ return String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+
+function renderRows() {
+  const list = document.getElementById("listScroll");
+  const rows = ROWS.filter(r =>
+    mgrFilter[r.mgr] &&
+    (searchText === "" || r.name.toLowerCase().includes(searchText) || r.id.toLowerCase().includes(searchText)));
+  if (rows.length === 0) {
+    list.style.display = "none";
+    const sp = document.getElementById("statePane");
+    sp.style.display = "flex";
+    const none = !mgrFilter.scoop && !mgrFilter.winget;
+    document.getElementById("stTitle").textContent = none ? "两个管理器都已隐藏" : "没有匹配的包";
+    document.getElementById("stBody").textContent = none
+      ? "Scoop 与 WinGet 的过滤都已关闭。点「全部」或任一管理器按钮恢复显示。"
+      : "当前过滤条件下没有可显示的行。调整管理器过滤或搜索词后重试。";
+    document.getElementById("stWhy").textContent =
+      "managers: " + (mgrFilter.scoop ? "scoop " : "") + (mgrFilter.winget ? "winget" : "") +
+      "  search: \"" + searchText + "\"";
+    return;
+  }
+  document.getElementById("statePane").style.display = "none";
+  list.style.display = "block";
+  list.innerHTML = rows.map(r => {
+    const idx = ROWS.indexOf(r);
+    const ver = r.inst === r.avail ? esc(r.inst) + " → " + esc(r.avail) : esc(r.inst) + " → " + esc(r.avail);
+    return `<div class="row ${idx===sel?"sel":""} ${checked.has(idx)?"checked":""}" data-i="${idx}">
+      <div class="cb" data-cb="${idx}"></div>
+      <div class="main">
+        <div class="l1"><span class="name">${esc(r.name)}</span><span class="id">${esc(r.id)}</span></div>
+        <div class="l2">
+          <span class="badge ${r.mgr}">${r.mgr==="scoop"?"Scoop":"WinGet"}</span>
+          <span>${esc(r.src)} · ${esc(r.scope)}</span>
+          <span class="mono">${ver}</span>
+          <span class="${r.prov==="backend-recorded"?"ok":"warn"}">${esc(r.prov)}</span>
+          ${r.hold?`<span class="warn">${esc(r.hold)}</span>`:""}
+          ${r.dup?`<span class="warn">疑似在 ${esc(r.dup)} 中重复</span>`:""}
+        </div>
+      </div></div>`;
+  }).join("");
+  document.getElementById("statusLine").textContent =
+    `就绪 · ${rows.length} 项（过滤自 ${ROWS.length}）`;
+}
+
+function renderDetail() {
+  const empty = document.getElementById("detailEmpty");
+  const body = document.getElementById("detailBody");
+  if (sel < 0 || sel >= ROWS.length) { empty.style.display="block"; body.style.display="none"; return; }
+  empty.style.display="none"; body.style.display="block";
+  const r = ROWS[sel];
+  document.getElementById("dName").textContent = r.name;
+  document.getElementById("dProv").textContent = "详情 · 归属 " + r.prov;
+  const kv = [["管理器",r.mgr==="scoop"?"scoop":"winget"],["来源",r.src],["精确 ID",r.id],
+              ["作用域",r.scope],["架构","x64"],["已装",r.inst||"未知"],["可用",r.avail||"未知"]];
+  document.getElementById("dKv").innerHTML = kv.map(([k,v]) =>
+    `<div class="kv"><span class="k">${k}</span><span class="v">${esc(v)}</span></div>`).join("");
+}
+
+function renderTasks() {
+  document.getElementById("tasksScroll").innerHTML = TASKS.map(t => `
+    <div class="task">
+      <div class="t1">
+        <span class="tid">${t.id}</span>
+        <span class="badge ${t.mgr}">${t.mgr==="scoop"?"Scoop":"WinGet"}</span>
+        <span class="target">${esc(t.target)}</span>
+        <span class="scope">${esc(t.scope)}</span>
+        <span class="act">${esc(t.act)}</span>
+        <span class="spacer"></span>
+        <span class="state-badge st-${t.state==="running"?"running":t.state==="waiting"?"wait":t.state==="partial"?"fail":"ok"}">${t.st}</span>
+      </div>
+      <div class="note ${t.state==="partial"?"bad":""}">${esc(t.note)}</div>
+      ${t.indet?'<div class="bar"><i></i></div>':""}
+      ${t.stage?`<div class="stage">阶段：${esc(t.stage)}</div>`:""}
+    </div>`).join("");
+  document.getElementById("taskCount").textContent = TASKS.length ? "("+TASKS.length+")" : "";
+}
+
+/* ---------- 审阅对话框 ---------- */
+function openReview() {
+  if (checked.size === 0) return;
+  const i = [...checked][0], r = ROWS[i];
+  const action = r.inst !== r.avail ? "upgrade" : "uninstall";
+  document.getElementById("rvOp").textContent = action;
+  const blocked = r.scope === "Machine";
+  const blk = document.getElementById("rvBlocked");
+  blk.style.display = blocked ? "block" : "none";
+  blk.textContent = blocked
+    ? "已阻止：Machine 作用域需要管理员权限，本插件不提权。该行只能查看。"
+    : "";
+  const kv = [["管理器",r.mgr],["来源",r.src],["精确 ID",r.id],["作用域",r.scope],
+              ["已装",r.inst],["目标",r.avail],["方式",action==="upgrade"?"winget upgrade --id …（精确 ID）":"winget uninstall --id …（精确 ID）"],
+              ["材料",action==="upgrade"?"已从来源确认 14.1.2 可用（演示）":"无需下载材料"],
+              ["依赖","无新增依赖"],["策略","单包 · 串行队列 · 失败即停"],
+              ["元数据","扫描于 14:32:07"]];
+  document.getElementById("rvKv").innerHTML = kv.map(([k,v]) =>
+    `<div class="kv"><span class="k">${k}</span><span class="v">${esc(v)}</span></div>`).join("");
+  document.getElementById("rvRisk").textContent = blocked ? "" :
+    "风险提示：卸载/升级会修改本机软件；队列按管理器串行执行，失败即停，不会静默重试。";
+  document.getElementById("agreeSrc").style.display = blocked ? "none" : "flex";
+  document.getElementById("agreeIns").style.display = blocked ? "none" : "flex";
+  document.getElementById("ckSrc").checked = false;
+  document.getElementById("ckIns").checked = false;
+  updateGate();
+  document.getElementById("reviewOverlay").style.display = "flex";
+}
+function updateGate() {
+  const blocked = document.getElementById("rvBlocked").style.display !== "none";
+  const ok = !blocked && document.getElementById("ckSrc").checked && document.getElementById("ckIns").checked;
+  document.getElementById("rvConfirm").disabled = !ok;
+  const g = document.getElementById("rvGate");
+  g.textContent = blocked ? "该操作已被策略阻止" : ok ? "已满足全部前提，可以确认" : "勾选全部协议后才能确认";
+  g.className = "gate" + (ok ? " ready" : "");
+}
+function closeReview(){ document.getElementById("reviewOverlay").style.display = "none"; }
+function closeSettings(){ document.getElementById("settingsOverlay").style.display = "none"; }
+document.getElementById("settingsBtn").addEventListener("click", () => {
+  document.getElementById("settingsBackend").textContent =
+    document.getElementById("backendLine").textContent;
+  document.getElementById("settingsOverlay").style.display = "flex";
+});
+document.getElementById("settingsOverlay").addEventListener("click", e => {
+  if (e.target.id === "settingsOverlay") closeSettings();
+});
+
+/* ---------- 事件 ---------- */
+document.querySelectorAll(".tab").forEach(el => el.addEventListener("click", () => {
+  document.querySelectorAll(".tab").forEach(x => x.classList.remove("on"));
+  el.classList.add("on");
+  const tab = el.dataset.tab;
+  const isTasks = tab === "tasks";
+  document.getElementById("body").style.display = isTasks ? "none" : "flex";
+  document.getElementById("tasksPage").style.display = isTasks ? "flex" : "none";
+  document.getElementById("filter").style.display = isTasks ? "none" : "flex";
+  document.getElementById("evidence").style.display = isTasks ? "none" : "flex";
+}));
+document.getElementById("listScroll").addEventListener("click", e => {
+  const cb = e.target.closest("[data-cb]");
+  if (cb) { const i = +cb.dataset.cb; checked.has(i) ? checked.delete(i) : checked.add(i);
+            renderRows(); syncFooter(); return; }
+  const row = e.target.closest(".row");
+  if (row) { sel = +row.dataset.i; renderRows(); renderDetail(); }
+});
+document.addEventListener("keydown", e => {
+  if (e.key === "Enter" && sel >= 0 && document.getElementById("reviewOverlay").style.display !== "flex") openReview();
+  if (e.key === "Escape") { closeReview(); closeSettings(); }
+});
+function syncFooter(){ document.getElementById("selCount").textContent = checked.size;
+  document.getElementById("reviewOpenBtn").disabled = checked.size === 0; }
+document.getElementById("reviewOpenBtn").addEventListener("click", openReview);
+document.getElementById("rvConfirm").addEventListener("click", () => {
+  closeReview();
+  document.getElementById("statusLine").textContent = "已加入队列（演示：不会真实执行）";
+  checked.clear(); renderRows(); syncFooter();
+});
+document.getElementById("ckSrc").addEventListener("change", updateGate);
+document.getElementById("ckIns").addEventListener("change", updateGate);
+document.getElementById("reviewOverlay").addEventListener("click", e => { if (e.target.id === "reviewOverlay") closeReview(); });
+/* 管理器多选：Scoop / WinGet 各自独立 toggle，允许两个都关。
+   - Scoop 按钮：翻转 scoop（winget 不动）
+   - WinGet 按钮：翻转 winget（scoop 不动）
+   - 全部：toggle——两个都开时全关，否则全开
+   高亮 = 该管理器当前是否显示。两个都关时列表显示空态说明。 */
+function syncMgrButtons() {
+  document.querySelectorAll("#backendSeg .seg-btn").forEach(b => {
+    const m = b.dataset.mgr;
+    const on = m === "all" ? (mgrFilter.scoop && mgrFilter.winget) : mgrFilter[m];
+    b.classList.toggle("on", on);
+    b.classList.toggle("muted", false);
+  });
+}
+document.getElementById("backendSeg").addEventListener("click", e => {
+  const btn = e.target.closest(".seg-btn");
+  if (!btn) return;
+  const m = btn.dataset.mgr;
+  if (m === "all") {
+    // Toggle: both on → both off; anything else → both on.
+    const bothOn = mgrFilter.scoop && mgrFilter.winget;
+    mgrFilter = { scoop: !bothOn, winget: !bothOn };
+  } else {
+    mgrFilter[m] = !mgrFilter[m];
+  }
+  syncMgrButtons();
+  renderRows();
+});
+document.getElementById("search").addEventListener("input", e => { searchText = e.target.value.trim().toLowerCase(); renderRows(); });
+document.getElementById("refreshBtn").addEventListener("click", () => {
+  document.getElementById("statusLine").textContent = "正在扫描（演示）…";
+  setTimeout(() => renderRows(), 600);
+});
+
+/* 主题控制 */
+function refreshTheme() {
+  applyTheme(document.getElementById("styleSel").value,
+             document.getElementById("darkBtn").classList.contains("on"),
+             document.getElementById("sizeSel").value);
+}
+document.getElementById("styleSel").addEventListener("change", refreshTheme);
+document.getElementById("sizeSel").addEventListener("change", refreshTheme);
+document.getElementById("darkBtn").addEventListener("click", e => {
+  e.target.classList.toggle("on"); refreshTheme();
+});
+document.getElementById("annotBtn").addEventListener("click", e => {
+  const w = document.getElementById("win");
+  w.classList.toggle("annotating");
+  e.target.classList.toggle("on");
+});
+
+/* 初始 */
+refreshTheme(); syncMgrButtons(); renderRows(); renderDetail(); renderTasks(); syncFooter();
+</script>
+</body>
+</html>

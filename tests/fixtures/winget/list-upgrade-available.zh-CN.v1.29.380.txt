@@ -1,0 +1,42 @@
+Name                                                                              Id                              Version         Available
+-------------------------------------------------------------------------------------------------------------------------------------------------
+7-Zip 26.05 (x64 edition)                                                         7zip.7zip                       26.05.00.0      26.06
+Android SDK Platform-Tools                                                        Google.PlatformTools            37.0.1          37.0.2
+CPUID CPU-Z 3.01                                                                  CPUID.CPU-Z                     3.01            3.02
+DBX                                                                               t8y2.DBX                        0.6.65          0.6.68
+Docker Desktop                                                                    Docker.DockerDesktop            4.97.0          4.99.0
+FanControl                                                                        Rem0o.FanControl                284             285
+Files                                                                             FilesCommunity.Files            4.2.9.0         4.3.0.0
+fzf                                                                               junegunn.fzf                    0.74.5          0.75.0
+Neovide                                                                           Neovide.Neovide                 0.17.1          0.17.2
+Notepad++ (x64)                                                                   Notepad++.Notepad++             8.9.8.1         8.9.9
+NVIDIA CUDA Toolkit 13.4                                                          Nvidia.CUDA                     13.4            13.5
+NVIDIA Nsight Compute 2026.3.0                                                    Nvidia.Nsight.Compute           < 2026.3.1      2026.4.0
+ODA Viewer                                                                        ODA.ODAViewer                   27.9.0          27.10.0
+ODADrawingsExplorer                                                               ODA.ODADrawingsExplorer         27.1.0          27.10.0
+ODAFileConverter                                                                  ODA.ODAFileConverter            27.9.0          27.10.0
+OfficeCLI                                                                         iOfficeAI.OfficeCLI             1.0.158         1.0.160
+pnpm                                                                              pnpm.pnpm                       12.16.1         12.18.0
+PowerToys (Preview) x64                                                           Microsoft.PowerToys             0.102.3001.0    0.102.3101
+PulseView                                                                         Sigrok.PulseView.Nightly        < nightly       nightly
+Python Launcher                                                                   Python.Launcher                 < 3.15.2        3.15.2
+Ruff                                                                              astral-sh.ruff                  0.17.1          0.17.2
+Rustup: the Rust toolchain installer                                              Rustlang.Rustup                 1.29.2          1.29.3
+TaskExplorer 1.8.0                                                                DavidXanatos.TaskExplorer       1.8.0           2.0.1
+Telegram Desktop                                                                  Telegram.TelegramDesktop        7.4             7.4.1
+TRAE CN (User)                                                                    ByteDance.Trae.CN               3.4.15          3.4.16
+UU远程                                                                            NetEase.UURemote                4.45.1.4372     4.46.0.4716
+WakaTime CLI                                                                      Wakatime.CLIWakatime            2.27.5          2.28.0
+WeChat                                                                            Tencent.WeChat.Universal        4.2.0.12        4.2.0.13
+Windows Assessment and Deployment Kit Windows Preinstallation Environment Add-ons Microsoft.WindowsADK.WinPEAddon 10.1.26100.2454 10.1.26100.9457
+ZCode 3.14.1                                                                      ZhipuAI.ZCode                   3.14.1          3.16.3
+Zotero                                                                            DigitalScholar.Zotero           10.0.7          10.0.8
+网易云音乐                                                                        NetEase.CloudMusic              3.1.42.205594   3.1.43.205627
+腾讯会议                                                                          Tencent.TencentMeeting          3.46.11.413     3.48.0.443
+34 upgrades available.
+
+The following packages have an upgrade available, but require explicit targeting for upgrade:
+Name  Id          Version  Available
+------------------------------------
+MSYS2 MSYS2.MSYS2 20260611 20260927
+2 package(s) have version numbers that cannot be determined. Use --include-unknown to see all results.

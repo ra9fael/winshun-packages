@@ -1,0 +1,112 @@
+# 更改日志
+
+[English](CHANGELOG.en.md)
+
+所有显著更改都记录在本文件中。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
+
+## [Unreleased]
+
+### Added
+
+- **精确 ID 可复制**：详情面板新增独立 ID 框（等宽字体 + 复制按钮），右键菜单也有「复制精确 ID」。`winget list` 会把精确 ID 打印成一列（如 `7zip.7zip`、`Docker.DockerDesktop`、`ARP\Machine\X64\...`、`MSIX\Microsoft.AV1VideoExtension_...`），但列表里它只是次要行，需要的时候得有一个明确的取用入口——命令行里手抄 ARP/MSIX 那种带花括号和反斜杠的 ID 不现实。
+- **`winget show` 信息块**：详情面板可查询该包的完整元数据（版本 / 发布者 / 描述 / 主页 / 协议 / 标签 / 安装器类型与下载地址），解析进平铺键值表。行内先显示"查询信息"按钮，查完变成"重新查询"。ARP 与 MSIX 行没有 manifest，面板会说明原因而不是给出空表。
+- **官网按钮使用真实主页**：此前的"官网"只是按包名拼一个搜索页猜过去。现在取 `winget show` 的 `Homepage`（仅接受绝对 `http(s)` URL），已知就直开，未知就先查再开；Scoop 包没有等价命令，面板如实说明而不假装能查。
+- **已安装页搜索框**：已安装页此前不可搜索，而这恰恰是最需要搜索的一页——一台机器上几百个包，靠滚动找是不可能的。它是**本地筛选**（纯内存，即时生效，不出转圈、不出骨架行），与发现页的**真实查询**（debounce + spinner + 骨架行）共用一个控件但语义不同。
+- **管理器过滤改为单选**：全部 / Scoop / WinGet 三选一，只有被选中的那个高亮。「全部」是独立选项而不是「另外两个都开」，此前选「全部」会三个按钮一起点亮，高亮不再表示"当前选了什么"。
+- **发现页可勾选并可安装**：搜索结果可以真正被选中并批量安装。此前发现页的行不可勾选，且详情面板对未安装的包也显示"升级/卸载"两个禁用按钮——那两件事对未安装的包不存在。
+- **按行状态给动作**：详情面板、右键菜单、选择工具条都只提供该行真实能做的动作。未安装 → 安装 + 官网；已安装 → 升级（有新版时）/ 卸载 + 官网。
+- **官网 / 项目页**：任何行都可以打开其项目页（Scoop 走 scoop.sh 搜索页，WinGet 走 GitHub 搜索）。查询一个还没装的包时，先看它的主页往往比直接安装更合适。
+- **任务行可选中**：点击任务行选中它，带左侧强调条与浅色底；状态栏显示「已选 <目标>」。此前任务行是刻意不可点的（`acceptedButtons: Qt.NoButton`），"我要取消的是哪一个"只能靠位置猜。
+- **「结果」筛选「全部」排最左**：「全部」是默认的广度选项，放中间让默认状态看起来像某种特殊过滤。
+- **开发工具**：`--fake` 现在也填充搜索结果与四个状态的任务行（running / queued / succeeded / failed），否则这些界面在无后端时是空的，无从检查。
+- **搜索动效**：搜索框内嵌旋转指示器，列表显示骨架行。此前搜索要几秒，期间列表是空的，看起来像"没找到"而不是"正在找"；状态栏一行小字太容易被忽略。
+- **发现页与已安装解耦**：发现页不再在没有搜索词时回退显示已安装清单（那让这个标签看起来像已安装页的副本）。新增「结果」筛选：仅未安装（默认）/ 全部 / 仅已安装。默认隐藏已安装项，因为搜索的目的是找新东西。
+- **已安装按来源筛选**：新增「来源」筛选：全部 / 管理器管理 / 用户自装。管理器管理的包是 backend 记录为自己的；用户自装的是它只是观察到的 ARP/MSIX 条目——两者不是一回事，混在一个列表里无法回答"哪些是我能通过这个插件管理的"。
+- **单项操作右键菜单**：右键任意行打开该行能做的动作（查看详情 / 复制精确 ID / 升级 / 卸载 / 安装 / 加入选择）。此前操作单个包必须先勾选再用多选入口，等于用多选手势做单件操作。菜单项由模型的能力字段决定，所以没有新版本的行不会提供升级。
+- **多选操作移到列表上方**：选择工具条出现在列表正上方，显示"已选 N 项 · X 个可升级 · Y 个已安装（可卸载）"并给出审阅与清除按钮。状态栏不再放按钮——状态栏是读输出用的地方，按钮放那里既容易被忽略又离它作用的行很远。
+- **`--select` / `--discover-filter` / `--search` / `--detail-action` / `--installed-filter`**：开发工具新增五个开关，让选择工具条、发现页筛选、搜索动效、详情面板的动作路径与已安装筛选都能不开鼠标地驱动和截图。`--detail-action` 一条命令即可复现上面那个崩溃路径。
+- **开发工具 `packages_dev.exe`**：不开宿主直接打开同一窗口，链接完全相同的 Controller、模型、适配器、platform 层与 QML 场景。`--style/--theme/--size` 可切外观，`--fake` 用确定性数据、`--simulate-elevated` 复现提权环境、`--data-dir real` 才碰真实缓存、`--plan` 只打印 argv、`--lint` 做布局体检。配 `run-dev.ps1` 一键构建并启动。它**不随包分发**（不在 `package.py` 白名单内），`packages.exe` 也没有这些开关。详见 `docs/dev-harness.md`。
+- **`--lint` 布局体检**：把已发生的缺陷编码成三条规则——容器无绘制祖先（深色下透白）、子项比父项宽、`管理器` 与分段按钮间距过大。有缺陷退出 1。
+- **`--expect-rows` 缓存断言**：在事件循环启动前检查模型行数，此时后端不可能已回应，所以行数只能来自磁盘缓存。
+- **`--review` 与 `--shot-delay`**：审阅页只能由状态驱动，加开关才能检查它的布局；真实后端要十几秒才回来，截图需要可控延迟。
+- **`check-layout.ps1`**：把 `-Lint` 铺满 6 个页面 × 深浅两色共 12 组，任一组有缺陷即退出 1。布局缺陷的共同点是代码评审看不出来、截图也容易误判，能在脚本里跑的检查比"仔细看"可靠。
+- **主题化按钮 `ThemedButton.qml`**：QtQuick Controls 的 Basic 样式默认按钮是浅灰块，深色主题下是亮块且文字不可读。现在全部按钮走一个组件，支持 `primary`/`danger` 强调。
+- **任务可逐条干预**：任务页每个任务按状态显示自己的按钮（排队→开始/移除，运行中→取消，失败/取消/中断→重试/移除，已完成→移除），全部按 task id 定位。此前的两个按钮只认"最后一个匹配任务"，点第 1 行可能操作到第 5 行。
+- **队列控制**：页头有暂停/继续、清空已完成、重新扫描。暂停只阻止取下一个任务，正在跑的继续（取消是另一个显式动作）。
+- **任务逐阶段日志**：每个任务记录 `时间 / 阶段 / 内容 / 退出码`，可在任务行内展开。所有文本写前经 `redactBlock` 脱敏（`%USERPROFILE%` 路径替换、去 ANSI、去疑似令牌），最多保留 200 条并保留尾部；只在内存，不落盘。
+- **审阅页动作选择器**：升级与卸载是两个独立意图，由用户选择而不是插件推断；切换后方式/材料/结果核对/风险/协议要求全部重算。卸载没有源协议与安装器协议，只要求"理解影响"。
+- **队列执行器**：确认入队后真正执行 —— 每任务走 `buildMutation`（唯一 argv 构建点）→ `platform::run` → `verifyInstalled`（退出码 0 不等于成功）→ `queue.finish`；阶段 acquire/install/verify 在任务页可见；取消终止 Job 并在任务页标明不是回滚；执行完成自动重新扫描列表。
+- **Scoop 更新列表**：读 `%SCOOP%\buckets\<bucket>\bucket\<app>.json` 的 `version` 与已装版本对比（纯文件读取，不跑 `scoop status`，不同步 bucket）；更新页有独立数据源与独立时间戳。
+- **磁盘缓存**：最近一次成功扫描写入 `%LOCALAPPDATA%\WinShun\plugins\ra9fael.packages.data\cache.json`（原子写），进程重启后立即渲染，超过 `refreshMinutes` 才后台重查。
+- 首个开发预览：`pkgs`（instant）打开软件包窗口，`packages <词>` 搜索；含 已安装 / 发现 / 更新 / 任务 四页。
+- 管理器过滤为多选分段按钮：Scoop / WinGet 各自独立 toggle，允许都关（显示"两个管理器都已隐藏"状态页）；「全部」本身也是 toggle（都开 ↔ 都关）。
+- 声明 `elevated` 权限：跟随 Win顺 的管理员状态（用户在宿主设置里确认一次后生效）。提权时 machine/global scope 的变更可进入预检，未提权时在预检阻塞并说明原因；标题栏权限 chip 反映运行时真实状态。
+- WinGet 只读查询（list / search / upgrade-available / pin list），基于 v1.29.380 zh-CN 真实输出 fixture 门控解析；不支持 `--output` 的版本如实回退到表格解析。
+- Scoop 只读查询（export JSON / search 段式文本 / status hold），走固定 `scoop.ps1` 可信入口、严格 argv 白名单。
+- 界面风格与 Win顺 一致：跟随 `nativeLook` 全部 token（fluent / brand / tactile / liquid × 深浅色）、圆角/直角设置、界面大小四档；半透明 token 按文档要求合成到底色。
+- 纯核心 L1 测试（身份/版本/计划/队列/队列干预/脱敏/主题 token/磁盘缓存）、真实 backend fixture 测试、真实子进程 L2 测试、L0 静态校验（manifest 形状、双语文档互链、x64 PE）。
+
+- **发现页未识别已安装包**：WinGet 搜索返回的 Neovim 与 `winget list` 的精确 ID 相同（忽略大小写），但发现页仍显示「未安装」，因为搜索结果没有合并已安装库存中的版本和操作能力。现在按管理器 + 不区分大小写的精确 ID，把安装版本、来源归属、可升级版本和卸载能力合并到发现行；候选包的原始 source/ID 保留，未安装包仍只有安装操作。`--tab-cycle-check` 断言。
+- **切换标签会清空发现页**：`setTab()` 在离开发现页时把查询词和结果快照一并清掉，于是搜索成功后转一圈回来列表是空的（查询中途切走还会丢结果）。现在每个标签拥有自己的查询状态：发现页的文字与结果在往返后保留，进行中的搜索照常落回快照，清空发现页搜索框才是显式清除。其他标签同理——已安装筛选、更新清单、队列状态都不因切标签丢弃。状态栏只在发现页可见时报告「正在搜索…」。新增 `--tab-cycle-check` 断言。
+- **重启后更新页永远是空的**：`saveCache()` 只写了已安装快照，更新清单从来没被持久化。于是每次重启，更新页都要重新等一次 `winget list --upgrade-available` + bucket 扫描（几十秒），期间页面是空的、状态栏还写着「尚未扫描」。现在更新清单与已安装清单写在同一个 `cache.json` 里（一次扫描一次写，不会因为两次写之间崩溃留下两个文件），并带自己的 `updatesAt`——它是另一个查询，不该和已安装清单共用一个时间戳。实测：冷启一次扫描后缓存里有 17 条更新记录，下一次热启动 `--expect-rows 14` 在事件循环启动前就通过（17 条里有 3 条目标版本形如 `< 2026.3.1`，无法证明可升级，更新页不显示它们）。
+- **重启后状态栏报「查询受限」，但窗口其实是好的**：`statusLine()` 把"存在任何状态面板"当成"查询失败"，而发现页的「输入关键词开始搜索」和「匹配项全部已安装」都是正常回答。重启后停在发现页、搜索框为空时，状态栏就这样把一个健康的窗口描述成坏掉的。现在只有 `backend-missing` / `unsupported` 才报「查询受限」，发现页分别报「尚未搜索」「搜索完成 · N 个结果」「搜索完成 · 匹配项全部已安装」，并且空结果与"全部已安装"是两种不同的回答（前者是没搜到，后者是搜到了但都已安装）。
+- **任务页页头说「空闲 · 0 个进行中」，列表里却有 4 个任务**：任务计数读的是内核队列 `m_queue.tasks()`，而开发工具的 `--fake` 只把行喂给了模型。现在 `--fake` 同时注入队列，标签计数、页头与状态栏三处同源。
+- **`--fake` 截图里的状态栏永远说「正在查询…」**：`openWindow()` 会按缓存新鲜度发起真实扫描，于是确定性截图描述的是一台还在等 backend 的窗口。新增 `setFakeMode()`：置上后完全不启动任何 backend 进程（扫描与搜索都被短路），窗口内容只由注入的快照决定。另外 `--fake` 现在先注入快照再开窗，顺序反了同样会触发扫描。
+- **`--detail-action` 在真实后端下永远跑不到**：它在窗口刚打开时执行，此时扫描还没回来，于是报 `row 0 out of range`——这条本用来复现崩溃的开关，对着真实数据反而一次也执行不了。现在它会等模型出现该行（250 ms 轮询，上限 60 s，超时明确失败而不是静默退出 0）。
+- **详情面板的精确 ID 永远显示 `—`**：QML 请求的是 `key: "id"`，而 `PackagesModel::fieldAt()` 只认 `"exactId"`，未知键静默返回空串。ID 是安装/卸载/升级命令里唯一可靠的身份，面板里这一行恰好是空的。现在改用 `exactId`，未知键也改成走一条能暴露问题的路径。
+- **勾选后点升级直接崩溃，重启后"查询受限"**：`DetailPane` 与右键菜单都是先调 `setReviewAction(action)` 再调 `openReview()`。调用那一刻 `m_reviewActions` 还是空的（动作表由 `openReview()` 填），`setReviewAction` 直接返回，于是审阅页以"没有指定动作"的状态打开，随后按空动作走完确认路径。更深一层：`openReview()` 要求恰好一行**被勾选**（`singleCheckedRow()`），而详情面板只是**选中**了它。现在统一走 `openReviewFor(row, actionId)`：清勾选 → 勾上该行 → `openReview()` → `setReviewAction()`，顺序反过来。实测 `--detail-action 1:upgrade` 从 `actions=0 action=` 变为 `actions=2 action=UPGRADE confirm=no`。
+- **搜索结束后搜索框仍在转圈**：`searching()` = `m_searchInFlight || m_searchPending`，而 `applySearchResults()` 有一个提前返回分支（结果已过期或标签已切走）直接 return，没有清 `m_searchPending`。现在三条退出路径都清。
+- **发现页「仅未安装」没有排除已安装的包**：`isInstalled()` 比的是完整 `PackageKey`（manager + source + id + scope）。`winget list` 对 ARP 行不打印 source、scope 又恒为 `unknown`，而 `winget search` 这两项填得不一样，于是没有一个包匹配得上——"仅未安装"就等于"全部"。现在只比 manager + id，且大小写不敏感（`winget list` 与 search 的大小写并不总是一致）。
+- **已在发现页搜索时会一直"查询受限"**：配合上面两条，搜索状态在被切走/被丢弃后没有回到干净状态。`setTab()` 现在会 `emit searchStateChanged()`，切标签立刻结束视觉等待。
+- **任务页选中项与状态栏不一致**：任务行的操作按钮按行状态出现，但行本身不可选中，`selectedTaskLabel` 也从未被设置。现在点行即选中，按钮点击同时把选中移到该行。
+- **管理器过滤的"两个都关"状态**：多选允许 Scoop 与 WinGet 全关，并为此维护了一个 `managers-hidden` 状态面板。单选后这个状态不存在了，面板与其字符串一并移除。
+- **详情面板在切换标签后仍显示上一页的行**：`ListView.currentIndex` 在模型重置后仍然保留。现在标签切换、搜索开始、模型重置都会清空选中。
+- **Scoop 搜索永远没有结果**：两个独立原因叠加。
+  1. Scoop 0.6.0 把 `search` 的输出从分段格式（`'main' bucket:` + `name (version)`）改成了表格（Name / Version / Source / Binaries），而解析器只认旧格式，于是每一行都被跳过。现在两种格式都解析，列位置从表头读取（列宽随最长包名变化，硬编码会错位），`Binaries` 列作为 `Source` 的右边界。
+  2. 更隐蔽的一个：`scoop.ps1` 通过 `powershell -File` 调用时，PowerShell 的格式化子系统没有接到管道上，所以输出**对象**的命令（`scoop-search` 输出表格）只打印自己的标题行，行数据全部丢失。实测 `-File` 只得到 `Results from local buckets...` 32 字节，`-Command` 得到 964 字节 14 行。改为 `-Command "& '<shim>'"`。
+- **搜索在首次扫描完成前输入会永久为空**：两个后端在 probe 状态为 `Unknown` 时都会拒绝查询，而搜索没有重试。现在 probe 未就绪时推迟搜索，扫描完成后自动补跑。
+- **缓存新鲜时搜索被无限推迟**：`openWindow()` 在缓存新鲜时不扫描，于是 probe 永远是 `Unknown`。现在 `loadCache()` 同时恢复每个后端的状态，probe 无需运行即可知。
+- **切换标签后详情面板仍显示上一页的行**：`ListView.currentIndex` 在模型重置后仍然保留。现在标签切换与搜索开始时清空选中，列表也在模型重置时重置 `currentIndex`。
+- **状态栏在搜索时报告"正在查询…"**：`m_busy`（后台扫描）优先于搜索状态，而扫描可能从窗口打开时就在跑。搜索是用户刚做的动作，现在优先报告。
+- **不可升级的行显示 `→ —`**：`available` 字段在无可用版本时返回 `—` 而不是空串，版本块把它当成有值。现在把 `—` 也视为无值，只显示当前版本。
+- **磁盘缓存实际上从未生效**：`loadCache()` 在构造函数里调用，它末尾的 `rebuildRows()` 在 `m_packages` 还是空指针时直接返回——那一刻模型尚未挂载。于是缓存被读进内存却没人把它变成行，冷启动列表全空，必须点刷新才有数据，正是"每次进去都得重新查询"的另一个成因。现在 `attachModels()` 在挂上模型后补一次重建。用 `packages_dev.exe --expect-rows`（事件循环启动前检查行数）确认：冷启动即从缓存画出 373 行。
+- **深色主题下中间区域透白、任务页整页透白**：`SplitView` 不是 `Control`，没有 `background` 槽（赋值被静默忽略），本身也不绘制任何东西；`TasksPage` 的根是裸 `Item`。两者在深色主题下都露出白色底层。现在 `SplitView` 外面套一层用 `theme.page` 绘制的 `Rectangle` 并定义 `handle:`，`TasksPage` 根改为带 `color` 的 `Rectangle`。`--lint` 的第一条规则就是"每个可见容器必须有绘制祖先"。
+- **深色主题下搜索框与审阅页勾选框仍是亮白块**：与按钮同源——QtQuick Controls 的 Basic 样式不跟随宿主主题，`TextField` 是白底面板、`CheckBox` 是浅色方块。新增 `ThemedField.qml` 与 `ThemedCheckBox.qml`，审阅页的动作选择器也改走 `ThemedButton`。至此 QML 里不再有裸 `Button`/`TextField`/`CheckBox`。
+
+- **Scoop 找不到（`scoop.ps1 was not found at C:\Users\Default\scoop\shims`）**：插件用 `%USERPROFILE%` 定位 Scoop，而宿主给提权插件的环境是干净的（系统变量 + `FOLDERID_Profile`），在未加载用户 profile 时该已知文件夹会解析成 `C:\Users\Default`，于是搜到一个不存在的目录。现在按 `%SCOOP%` → **本进程令牌对应的注册表 `ProfileList\<SID>\ProfileImagePath`**（不读 `USERPROFILE`）→ `PATH` 上的 `scoop.ps1`（其 `\shims\` 的父目录即根）→ `%ProgramData%\scoop` 的顺序解析，并在失败原因里写出根来自哪一步。真实 `scoop export` 已在正常环境与模拟提权环境（`USERPROFILE=C:\Users\Default` 且 `PATH` 去掉 scoop）下分别跑通，均返回同样的 6 个包。
+- 缓存把「后端不可用」当成新鲜数据：修好定位后，磁盘里上一条 `scoop: missing` 仍会在 `refreshMinutes` 内继续显示。现在打开窗口时只要有任一后端不是 `Ready` 就重新扫描，失败状态不再被当作可复用的结果。
+- **已安装页无法勾选、无法卸载、计划全部失败**：三个现象同一条根因链，且是两个独立的 bug 叠加。
+  1. `winget list` 不打印 scope，行 scope 为 `unknown`；`WingetAdapter::buildMutation()` 却调用 `isResolvable(key)` 的默认参数（要求已知 scope），于是**每次真正执行都被拒**为 `identity is not exactly resolvable`——这就是任务页 `计划都失败` 的直接原因。改为只有 install 传 `--scope`，只有 install 强制要求 scope；upgrade/uninstall 按精确 ID 匹配。
+  2. `fromListText` 把 `canUninstall` 一律设为 `false`，而 `canUpgrade` 又依赖 `winget list` 并不提供的可用版本，于是三个动作标志全为 false → `actionable=false` → 勾选框 `enabled: false` 且降到 35% 透明度，**整个已安装页都点不动**。改为「已安装且非 ARP 行即可卸载」，并在刷新时把更新清单的目标版本按精确身份合并回已安装行，让升级也可以直接选。
+  3. 更新页与 Scoop bucket manifest 的更新行同样没有置 `canUninstall`，一并补上。
+
+  真实证据：`isOfficeAI.OfficeCLI`（scope `unknown`、已装 1.0.158）现在可以勾选、可以打开卸载审阅页并进入可确认状态；`winget uninstall` 的 argv 不含 `--scope`。
+- 找不到卸载操作：审阅页按规则硬推断动作，已装且有新版时永远推断为升级，没有任何入口选卸载。改为动作选择器，合法动作由行的真实状态决定。
+- 管理器标签与分段按钮间距过大（实测 137px）：分段按钮用 `Layout.preferredWidth: implicitWidth` 而内部 `Row` 是 `anchors.centerIn: parent`，`RowLayout` 在这种"宽度可由内容决定、但内容又依赖父宽"的组合下算出一个远大于实际的隐式宽度。改用 `Row`（按子项真实宽度排布）并让分段控件用显式 `width`/`height`。此前的 `visible: false` 仍占位是另一个成因，一并修掉。
+- 任务页状态栏显示"只读查询完成"、页脚显示"已选 0 / 审阅所选操作…"：状态栏文案依赖标签但 `setTab` 没有重发信号；页脚的选择控件是列表页概念。现在任务页状态栏报告队列，页脚选择区在任务页隐藏。
+- 任务日志面板在深色主题下不可读：用了不存在的 token `theme.controlFill`（解析为 undefined → 透明 → 落到白色底层）。改为 `theme.control`，并加了"所有 `theme.*` 引用必须已定义"的检查。
+- 并行刷新时 `winget pin list` 跑了两遍、`scoop export` 也跑了两遍：已安装与更新两个查询各自调用一次。现在各自共用一次带互斥的缓存，并在每次刷新开头显式失效（扫描内共享、扫描间不共享）；`verifyInstalled` 仍绕过缓存，否则核对会读到变更前的状态。
+- 无法执行更新/安装/卸载：队列只有状态机、没有执行器，入队后永远停在 waiting。已实现执行器（见 Added），并解除「材料预检」阻塞——winget/scoop 的安装材料由 backend 自行下载，插件不做本地预取或校验，审阅页明确写出这一点。
+- 标签切换后搜索串台：搜索文本此前被当作 filter 传给所有标签。现在每个标签有自己的数据源（已安装 / 发现搜索结果 / 更新清单）与独立过滤语义，搜索只作用于发现页；切换标签清空搜索框，搜索框也只在发现页显示。
+- Scoop 更新列表为空：更新页此前用已安装快照，而 `scoop export` 不带可用版本。改为对比本地 bucket manifest 的 `version`（纯只读），更新页有独立数据源与时间戳。
+- 每次启动都重新查询：缓存只在内存，宿主重启插件即失效。现在成功后写入磁盘并在启动时先加载，`refreshMinutes` 内不重查。
+- 发现页输入卡死（Not Responding）：搜索在 GUI 线程同步跑 winget 子进程。改为 worker 线程异步（单飞行、丢弃过期结果）+ 500 ms 防抖。
+- 内存过高：卡死期间按键堆叠 winget 子进程是主因；异步化后消除，切离发现页丢弃搜索快照。
+- 状态页文字未居中：窄窗口下 `Layout.alignment` 对超宽 Text 无效，改为 `fillWidth` + `horizontalAlignment`。
+- 更新页无法操作 upgrade：`winget list` 不打印 scope，行 scope 为 unknown，而身份门要求 scope 已知。现在只有 install 需要 scope，upgrade/uninstall 按精确 ID 匹配。
+- `winget --version failed (exit 0)`：`run()` 循环退出后未做最后一次管道 drain，快速退出进程的输出丢失。
+- 窗口内所有固定高度条塌缩为 0、内容叠画：context property 名为 `Theme`（QML 当类型名解析）+ Theme.qml 创建时 `themeResolver` 不可见导致绑定静默失效。
+- 设置弹窗文字溢出：ColumnLayout 未绑定宽度，`wrapMode` 无换行基准。
+
+### 安全与边界
+
+- 不生成 `winget reinstall`（该动词不存在），不把 `repair` 当重装，不用 `scoop update --force` / `reset` 冒充重装。
+- 不自动同意任何 source/installer 协议；不接受 option-like 包 ID、URL 或脚本作为身份；不拼接 shell 命令。
+- 不在启动时自行请求提权：`elevated` 只跟随宿主的管理员状态，且由宿主设置页呈现确认，插件不弹 UAC。
+- 安装/升级/重装停在预检（材料预取未实现，按设计禁止"先卸载再找包"）；卸载可到确认页。执行器与审阅动作选择器已实现并有 L1 覆盖，但开发过程中没有在真机上执行过任何 mutation，所以执行路径的证据是 fixture/L1，而不是一次真实安装。
+
+### Known limitations
+
+- liquid 风格的 Acrylic/Mica 背景未在插件窗口复刻（插件拿不到宿主的 DWM backdrop），使用合成后的不透明配色。
+- 未在真实宿主进程内验证 appearance 链路；宿主集成后需补一轮。
+- 进程在 `app.exec()` 返回后退出挂起（本机 Qt 环境疑似问题；宿主以 Job 结束插件进程，不影响集成）。

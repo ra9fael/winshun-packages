@@ -1,0 +1,28 @@
+Found Docker Desktop [Docker.DockerDesktop]
+Version: 4.99.0
+Publisher: Docker Inc.
+Publisher Url: https://www.docker.com/
+Publisher Support Url: https://www.docker.com/support
+Author: Docker Inc.
+Moniker: docker
+Description: Docker Desktop is an application for macOS and Windows machines for the building and sharing of containerized applications. Access Docker Desktop and follow the guided onboarding to build your first containerized application in minutes.
+Homepage: https://www.docker.com/products/docker-desktop
+License: Proprietary
+License Url: https://www.docker.com/legal/docker-subscription-service-agreement
+Privacy Url: https://www.docker.com/legal/privacy
+Copyright: © 2015-2026 Docker Inc. All rights reserved.
+Copyright Url: https://www.docker.com/legal/docker-subscription-service-agreement
+Tags:
+  container
+  containerization
+  develop
+  docker-desktop
+  virtualization
+  xp8cbj40xlbwkx
+Installer:
+  Installer Type: exe
+  Installer Locale: en-US
+  Installer Url: https://desktop.docker.com/win/main/amd64/245822/Docker%20Desktop%20Installer.exe
+  Installer SHA256: a5e299131c9c53d60f3f752b162078945eb5faf6eedcf0be20a214c6e6cea444
+  Release Date: 2026-11-05
+  Offline Distribution Supported: true

@@ -1,0 +1,1 @@
+WARN  Scoop bucket(s) out of date. Run 'scoop update' to get the latest changes.

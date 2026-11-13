@@ -1,0 +1,62 @@
+# WinShun Packages (requirements draft)
+
+[中文](README.md) · [Design](plugin-design.en.md) · [UI specification](UI-SPEC.en.md) · [Test plan](TEST-PLAN.en.md)
+
+`ra9fael.packages` proposes a single interface for Scoop / WinGet package discovery, installation, removal, reinstallation and upgrades. This is requirements work only: no implementation, manifest, scripts, configuration, build artifacts or installable package exists. Behavior below describes proposed acceptance requirements, not shipped functionality.
+
+## Scope and entry
+
+The proposed WinShun keyword `packages` opens a separate window on Installed. Navigation is Installed / Discover / Updates / Tasks with All / Scoop / WinGet filters. Queries only return results; changes require selecting an exact package, reviewing a refreshed plan, confirming, and queuing. Either backend remains usable when the other is missing. Managers, PowerShell modules and other optional dependencies are never installed automatically.
+
+P0 covers normal-user installed / search / details / update-list, selected install / uninstall / reinstall / upgrade, and the queue. P1 covers read-only source/bucket diagnostics, recovery assistance and explicit metadata maintenance. Full source/bucket/pin/hold management is P2. P0 must already read and respect existing pins/holds. P0 excludes implicit upgrade-all, cross-manager migration, automatic repair, automatic agreement acceptance, default purge and automatic elevation.
+
+## Stable functional requirements
+
+PKG-Fxx identifiers are FRs. Priority does not weaken safety constraints. Preserve IDs when splitting work; extend with new IDs. These 30 requirements are traced individually in the [test plan](TEST-PLAN.en.md).
+
+| FR | Priority | Requirement and observable acceptance |
+|---|---|---|
+| PKG-F01 | P0 | Detect backend path, version, invocation kind and capabilities; distinguish missing, denied and unsupported without downloading dependencies; one failure does not block the other backend. |
+| PKG-F02 | P0 | Installed shows inventory and provenance evidence; entries merely enumerated/matched by WinGet list are observed or matched, never labeled managed solely because they appear. |
+| PKG-F03 | P0 | Discover searches asynchronously with debounce, cancellation and rejection of late results; typing, selection and Enter for details never install. |
+| PKG-F04 | P0 | Details show manager, source/bucket, exact ID, scope, versions, architecture, trust/ownership evidence and capability limitations; missing fields explicitly say unknown. |
+| PKG-F05 | P0 | Updates uses backend update evidence and shows target version, unknown, hold/pin and scan time; string ordering is not an upgrade decision. |
+| PKG-F06 | P0 | Stable identity is manager + source/bucket + id + scope; equal names/IDs across sources/scopes stay separate. Possible cross-manager duplicates are advisory only and never trigger removal. |
+| PKG-F07 | P0 | Selected install addresses one refreshed, exactly resolved identity, shows dependencies, target version/scope and known side effects, and queues only after confirmation; ambiguity blocks execution. |
+| PKG-F08 | P0 | Selected uninstall shows the exact installed instance, provenance, scope and data risk; observed non-WinGet installations require independently verified unique uninstall targeting and explicit confirmation; no default purge. |
+| PKG-F09 | P0 | Selected reinstall follows a backend/version capability table; verify availability of the original or explicitly chosen alternative version first; no unverified force install. Uninstall/install requires non-atomicity, data-risk and intermediate-failure disclosure. |
+| PKG-F10 | P0 | Selected upgrade respects hold/pin, scope and unknown-version policy; unknown versions require manual review and individual reconfirmation, never implicit batch inclusion. |
+| PKG-F11 | P0 | Mutations are strictly serial per manager; suspected cross-backend conflicts on the same installation also pause for review. Queue order, pending removal and blockers are visible; manager wildcard updates cannot replace selected tasks. |
+| PKG-F12 | P0 | Refresh the plan before confirmation and before execution; changes in source, version, scope, hold/pin, agreements, provenance or dependencies invalidate approval and require review again. |
+| PKG-F13 | P0 | Distinguish pending-task, query and running-task cancellation; running cancellation may only stop waiting or a child process, with no guarantee of installer termination or rollback; refresh actual state. |
+| PKG-F14 | P0 | Tasks show phases, estimated progress, exit codes, outcome verification and redacted diagnostics; use indeterminate progress when total work is unknown, never invented percentages. |
+| PKG-F15 | P0 | Permission denied, interactive installer pending, restart required, unknown result, and removed-but-reinstall-failed are separate states; process exit alone is not success. |
+| PKG-F16 | P0 | Source agreements and installer agreements are separately disclosed and explicitly accepted; refusal blocks related work. Searches cannot silently accept agreements; acceptance is not global consent to every agreement. |
+| PKG-F17 | P1 | Use normal + resident + lazy and accurately disclose ui/processes/network/elevated/files:read/files:write. Children remain in the Job. `elevated` makes the plugin follow WinShun's administrator state once the user confirms it in the host settings; only then can machine/global scope run, and without it those scopes are blocked at preflight with the reason. The title-bar rights chip reports the real runtime state. |
+| PKG-F18 | P0 | Recognize Scoop PowerShell scripts/shims and use a trusted fixed entry with structured argument binding; use safe argv for WinGet. Never concatenate user text into a shell or accept arbitrary scripts, manifest URLs or extra CLI flags as IDs. |
+| PKG-F19 | P0 | Parsing is fixture-adapted by backend/version/command/language/encoding; unproven combinations are unsupported, not guessed. WinGet structured APIs/modules are explicit optional dependencies, never auto-installed; JSON is not assumed for every CLI command. |
+| PKG-F20 | P0 | Cache records observation time and staleness; detect external manager activity/lock conflicts, invalidate and refresh. Where detection is unreliable, disclose uncertainty and recheck before execution; never seize locks. |
+| PKG-F21 | P0 | Disclose actual network, manager-process and file side effects; redact logs, collect no telemetry and do not read arbitrary user documents by default; settings/task records stay in plugin data. |
+| PKG-F22 | P0 | Empty, loading, error, partial success, offline/stale and unsupported have distinct readable messages and recovery actions; failure is never rendered as “no packages.” |
+| PKG-F23 | P0 | The compact window supports complete keyboard use, themes, DPI/scaling and screen readers; risk is not communicated by color/icons alone, and focus returns to the originating item. |
+| PKG-F24 | P0 | Host exit, disabling or crashes never automatically replay mutations; restored tasks are interrupted/unknown until actual installation state is reconciled and the user replans. |
+| PKG-F25 | P0 | Performance targets and memory/output/queue/cache capacity derive from isolated measured peaks plus justified headroom; record conditions and cancellation response, never invent fixed limits. |
+| PKG-F26 | P0 | Dynamic verification uses isolated VMs and disposable packages only; L0–L5 evidence is traceable and unexecuted work is labeled. L3 is required for implementation acceptance; unpassed L4 permission/installer paths stay disabled. |
+| PKG-F27 | P1 | Expose read-only source/bucket state, identity and diagnostics; refreshing sources or self-updating a manager is a separate side-effecting plan, never hidden in search. |
+| PKG-F28 | P2 | Full source/bucket management requires separate confirmation, trust and cache invalidation design; P0 never automatically adds missing sources/buckets. |
+| PKG-F29 | P2 | Full pin/hold management requires separate confirmation and auditing; P0 reads/respects existing policy and never bypasses it using force/ignore-pin. |
+| PKG-F30 | P0 | Chinese/English README, design, UI and test documents are substantively equivalent and cross-linked; facts/inferences/unverified claims stay distinct, and release requires a version capability table plus real evidence. |
+
+## Manager semantics and reinstall boundaries
+
+Official WinGet documentation lists search / list / show / install / upgrade / uninstall / repair, not reinstall. Never generate `winget reinstall`; repair is not reinstallation. Do not claim universal `--output json`. Optional structured paths need independent version/deployment validation.
+
+Scoop source revision `e6aa3b366bdee8ed138c1e0f7b85192ebdd35d0f` establishes that argument-free `update` updates Scoop and buckets; `update <app>` upgrades an app and may first synchronize the manager/metadata; `install` has no force option; `update --force` does not guarantee the original version, and an @version pin can resolve to bucket HEAD; `reset` rebuilds links, shims and environment state without downloading/reinstalling the package. See [design facts and capability table](plugin-design.en.md). Reading source is not a local runtime test.
+
+Reinstall planning first resolves exact identity and version. If the original version is unavailable, stop or require explicit alternative-version selection and reconfirmation. Before removal, verify a supported acquisition/staging mechanism, manifest, architecture, dependencies, installation material integrity and licensing. Disable reinstall when this cannot be done; never remove first and then search for an installer. Preflight cannot guarantee later installation, data retention or automatic rollback. No default purge; installer/uninstaller behavior can still delete data.
+
+## Documentation and validation status
+
+Basis: [workspace rules](../DEVELOPMENT.md), [host permissions and Job](../WinShun/docs/plugins.md), [official WinGet documentation](https://learn.microsoft.com/en-us/windows/package-manager/winget/), [official Scoop source](https://github.com/ScoopInstaller/Scoop/tree/e6aa3b366bdee8ed138c1e0f7b85192ebdd35d0f/libexec). Documentation and necessary read-only official-source checks are complete. No package manager or install/uninstall operation was run; no L0–L5 dynamic tests were executed.
+
+Open decisions: installer/UAC broker viability inside the host Job; concrete supported manager versions/language fixtures; optional WinGet API dependencies; reliable original-version material prefetch; exact scope/uninstall resolution for unknown/observed entries; performance/capacity calibration. All executable capabilities remain unaccepted; design approval is required before implementation.
