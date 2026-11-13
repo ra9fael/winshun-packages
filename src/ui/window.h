@@ -16,6 +16,7 @@
 #include <QVariantList>
 #include <QVariantMap>
 
+#include <atomic>
 #include <memory>
 #include <string>
 
@@ -107,6 +108,14 @@ class Controller : public QObject {
     Q_PROPERTY(bool packageInfoBusy READ packageInfoBusy NOTIFY packageInfoChanged)
     Q_PROPERTY(bool queuePaused READ queuePaused NOTIFY tasksChanged)
     Q_PROPERTY(int finishedTasks READ finishedTasks NOTIFY tasksChanged)
+    // The result of the last "copy this task's log" action, shown next to the
+    // button: a copy with no feedback is indistinguishable from a button that did
+    // nothing.
+    Q_PROPERTY(QString copyNotice READ copyNotice NOTIFY copyNoticeChanged)
+    // The selected row index, so a surface that cannot bind to the ListView's
+    // currentIndex (the details pane, a capture without a mouse) still follows the
+    // selection. Selection is presentation state and implies no action.
+    Q_PROPERTY(int selectedRow READ selectedRow NOTIFY selectionChanged)
 
 public:
     explicit Controller(QObject* parent = nullptr);
@@ -145,6 +154,10 @@ public:
     // before opening the window: openWindow() refreshes a stale cache, which is
     // right in the plugin and wrong in a deterministic screen capture.
     void setFakeMode(bool fake) { m_fakeMode = fake; }
+    // Holds `searching` true for a while. Only the development harness uses it:
+    // a fake run starts no query, so the in-box spinner would otherwise never be
+    // visible and the one visual it exists for could not be screenshotted.
+    void holdSearching(int ms);
 
     // --- Q_PROPERTY readers ---------------------------------------------------
     QString locale() const { return m_locale; }
@@ -161,6 +174,8 @@ public:
     QString installedFilter() const { return m_installedFilter; }
     bool searching() const { return m_searchInFlight || m_searchPending; }
     QString statusLine() const;
+    QString copyNotice() const { return m_copyNotice; }
+    int selectedRow() const;
     QString scanLine() const;
     QString backendLine() const;
     int checkedCount() const;
@@ -232,6 +247,10 @@ public slots:
     // Copies text to the system clipboard. The context menu's "copy exact ID" is
     // the only way to get an identity out of the window without retyping it.
     void copyToClipboard(const QString& text);
+    // Copies one task's whole redacted log, so a failure can be pasted into a bug
+    // report instead of being read off the screen. The log is already redacted
+    // when it is written, so nothing here needs to sanitise it again.
+    Q_INVOKABLE void copyTaskLog(qulonglong id);
     // Opens the package's project/home page in the default browser. Read-only and
     // outside any manager: for a package that is not installed yet, looking it up
     // is often what the user wants instead of an immediate install.
@@ -276,6 +295,7 @@ signals:
     void filterChanged();
     void statusChanged();
     void selectionChanged();
+    void copyNoticeChanged();
     void searchStateChanged();
     void packageInfoChanged();
     void statePaneChanged();
@@ -342,7 +362,7 @@ private:
     // buildMutation, the only place a command line is formed.
     std::vector<std::string> m_acceptedAgreements;
     // Set by requestCancelLastRunning; the executor polls it between phases.
-    std::shared_ptr<bool> m_runCancel;
+    std::shared_ptr<std::atomic_bool> m_runCancel;
 
     QString m_locale = QStringLiteral("zh");
     bool m_dark = false;
@@ -358,12 +378,16 @@ private:
     QVariantMap m_packageInfo;
     bool m_packageInfoBusy = false;
     int m_packageInfoRow = -1;
+    // The exact id the in-flight or completed lookup belongs to. Row numbers are
+    // not a stable identity across a rebuild, so a stale reply is detected by id.
+    QString m_packageInfoId;
     QString m_sourceFilter = QStringLiteral("all");
     QString m_installedFilter;
     QString m_discoverFilter = QStringLiteral("all");
     // Checked once at startup: elevation cannot change while the process lives.
     bool m_elevated = false;
     QString m_searchText;
+    QString m_copyNotice;
     QString m_statusLine;
     QString m_statePane;
     QString m_stateWhy;

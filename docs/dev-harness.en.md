@@ -56,6 +56,8 @@ The script sets `vcvars64` and then calls cmake in one process (it is the only p
 | `--installed-filter TEXT` | Type TEXT into the Installed tab's filter box (local filter, starts no process) |
 | `--detail-action ROW:ACT` | Press the details pane's action for row ROW the way a user would: **select** it (no checkbox), then act (`upgrade` / `uninstall` / `install`). This switch reproduced the "select then upgrade" crash |
 | `--tab-cycle-check` | With `--fake --search TEXT`: verify that an installed Neovim result (ID casing differs) is recognized and that Discover's query and rows survive Installed → Discover switching |
+| `--focus-row N` | Select (not check) row N, equivalent to a mouse click. The details pane is the only surface that shows `winget show` metadata, so it cannot be captured without this |
+| `--hold-searching MS` | Hold the searching state for MS so the in-box spinner can be captured. `--fake` short-circuits the search, so that animation never appears otherwise |
 | `--discover-filter new\|all\|installed` | Discover's 结果/Result filter |
 | `--select 0,2,5` | Check the given rows, for checking the selection bar |
 | `--expect-rows N` | Exit 1 unless the model holds exactly N rows when the window opens, before any backend reply |

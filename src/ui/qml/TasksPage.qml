@@ -116,6 +116,52 @@ Rectangle {
             model: tasksModel
             boundsBehavior: Flickable.StopAtBounds
             ScrollBar.vertical: ScrollBar {}
+            // Same keyboard contract as the package list: arrows/Home/End for
+            // Windows habits, j/k/g/G for Vim habits, and Enter toggles nothing
+            // here because a task's buttons are explicit.
+            focus: true
+            activeFocusOnTab: true
+            Keys.onDownPressed: function(event) {
+                if (count === 0) return
+                currentIndex = Math.min(count - 1, currentIndex + 1)
+                positionViewAtIndex(currentIndex, ListView.Contain)
+                event.accepted = true
+            }
+            // Home/End have no Keys handler of their own; they arrive as key
+            // events, so they are dispatched from the same place as j/k. Naming a
+            // non-existent signal (Keys.onEndPressed) fails at scene load.
+            Keys.onUpPressed: function(event) {
+                if (count === 0) return
+                currentIndex = Math.max(0, currentIndex < 0 ? 0 : currentIndex - 1)
+                positionViewAtIndex(currentIndex, ListView.Contain)
+                event.accepted = true
+            }
+            Keys.onPressed: function(event) {
+                if (count === 0) return
+                if (event.key === Qt.Key_Home) {
+                    currentIndex = 0
+                    event.accepted = true
+                } else if (event.key === Qt.Key_End) {
+                    currentIndex = count - 1
+                    positionViewAtIndex(currentIndex, ListView.Contain)
+                    event.accepted = true
+                } else if (event.key === Qt.Key_J) {
+                    currentIndex = Math.min(count - 1, currentIndex + 1)
+                    positionViewAtIndex(currentIndex, ListView.Contain)
+                    event.accepted = true
+                } else if (event.key === Qt.Key_K) {
+                    currentIndex = Math.max(0, currentIndex < 0 ? 0 : currentIndex - 1)
+                    positionViewAtIndex(currentIndex, ListView.Contain)
+                    event.accepted = true
+                } else if (event.key === Qt.Key_G && (event.modifiers & Qt.ShiftModifier)) {
+                    currentIndex = count - 1
+                    positionViewAtIndex(currentIndex, ListView.Contain)
+                    event.accepted = true
+                } else if (event.key === Qt.Key_G) {
+                    currentIndex = 0
+                    event.accepted = true
+                }
+            }
             // Report the selection so the status line can name it. A background
             // tint alone is easy to lose when several rows look similar.
             onCurrentIndexChanged: {
@@ -375,6 +421,14 @@ Rectangle {
                             text: (logOpen ? root.t("收起日志", "Hide log") : root.t("查看日志", "Show log"))
                                   + "（" + logCount + "）"
                             onClicked: userOpened = !userOpened
+                        }
+                        ThemedButton {
+                            // A failure is read once and then needs to leave the
+                            // window: pasting the log into an issue is the reason
+                            // anyone expands it. The log is already redacted.
+                            visible: logCount > 0
+                            text: root.t("复制日志", "Copy log")
+                            onClicked: controller.copyTaskLog(taskId)
                         }
                     }
 

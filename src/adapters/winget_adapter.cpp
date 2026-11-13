@@ -2,6 +2,7 @@
 #include "winget_adapter.h"
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cstdio>
 
@@ -405,14 +406,74 @@ bool WingetAdapter::verifyInstalled(const ProbeResult& probe, const PackageKey& 
         detail = "verification output was unsupported: " + failure;
         return false;
     }
-    for (const auto& p : snapshot.packages) {
-        if (p.key.id == key.id) {
-            installedVersion = p.installedVersion;
-            return true;
+    // `winget list --id X --exact` is case-insensitive and can report the id with
+    // different casing than the plan stored, so compare case-insensitively. An
+    // exact string compare here reported "not found after the run" for a package
+    // the output had just listed.
+    const auto sameId = [](const std::string& a, const std::string& b) {
+        if (a.size() != b.size())
+            return false;
+        for (std::size_t i = 0; i < a.size(); ++i) {
+            if (std::tolower(static_cast<unsigned char>(a[i])) !=
+                std::tolower(static_cast<unsigned char>(b[i])))
+                return false;
         }
+        return true;
+    };
+    for (const auto& p : snapshot.packages) {
+        if (!sameId(p.key.id, key.id))
+            continue;
+        installedVersion = p.installedVersion;
+        detail = "the package is installed at " + installedVersion;
+        return true;
     }
     detail = "the package was not found after the run";
     return false;
+}
+
+bool WingetAdapter::verifyReachedTarget(const PackageKey& key, const std::string& targetVersion,
+                                        std::string& installedVersion, std::string& detail)
+{
+    installedVersion.clear();
+    std::string version, why;
+    if (!verifyInstalled(probeCached(), key, version, why)) {
+        detail = why;
+        return false;
+    }
+    installedVersion = version;
+    return versionReached(version, targetVersion, detail);
+}
+
+bool WingetAdapter::versionReached(const std::string& installed, const std::string& target,
+                                   std::string& detail)
+{
+    if (target.empty()) {
+        detail = "installed at " + installed + "; no target version was recorded to compare against";
+        return true;
+    }
+    // Exit code 0 says the installer ran, not that the machine now has the
+    // version the plan promised. Comparing the reported version is the only
+    // evidence that separates "upgraded" from "the backend reported success but
+    // did nothing" — the exact case a DBX upgrade hit.
+    const Order order = compareVersionStrings(installed, target);
+    if (order == Order::Same) {
+        detail = "installed at " + installed + ", which matches the target " + target;
+        return true;
+    }
+    if (order == Order::Older) {
+        detail = "still at " + installed + " after the run; the target was " + target;
+        return false;
+    }
+    if (order == Order::Unknown) {
+        // Two unorderable strings: report both rather than claim success. A version
+        // that cannot be compared is not evidence of reaching the target.
+        detail = "installed version reads \"" + installed + "\"; the target \"" + target +
+                 "\" could not be compared, so success is not claimed";
+        return false;
+    }
+    detail = "installed version " + installed + " is newer than the target " + target +
+             "; treated as reached";
+    return true;
 }
 
 // ---------------------------------------------------------------- pure helpers

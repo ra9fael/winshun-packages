@@ -56,6 +56,8 @@
 | `--installed-filter TEXT` | 在已安装页的筛选框输入 TEXT（纯本地过滤，不跑进程） |
 | `--detail-action ROW:ACT` | 像用户那样点详情面板的动作：**只选中**第 ROW 行（不勾选）再执行 ACT（`upgrade` / `uninstall` / `install`）。这条开关复现过"选中后点升级崩溃" |
 | `--tab-cycle-check` | 与 `--fake --search TEXT` 联用：验证发现结果里的已安装 Neovim（不同大小写 ID）被识别，并且发现页搜索词与结果在已安装→发现切换后仍保留 |
+| `--focus-row N` | 只选中（不勾选）第 N 行，等价于鼠标点击。详情面板是唯一展示 `winget show` 元数据的界面，没有它截不到 |
+| `--hold-searching MS` | 把「搜索中」保持 MS 毫秒，用于截取搜索框内嵌 spinner。`--fake` 会短路搜索，否则这个动效永远不出现 |
 | `--discover-filter new\|all\|installed` | 发现页的「结果」筛选 |
 | `--select 0,2,5` | 勾选指定行，用于检查选择工具条 |
 | `--expect-rows N` | 窗口刚打开、后端尚未回应时模型必须正好 N 行，否则退出 1 || `--dump-tree` | 打印 item 树几何 |

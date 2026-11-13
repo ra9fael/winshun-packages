@@ -3,7 +3,7 @@
   "manifest": 1,
   "id": "ra9fael.packages",
   "name": {"zh": "软件包", "en": "Packages"},
-  "version": "0.2.0",
+  "version": "0.3.0",
   "minWinShun": "0.22.0",
   "description": {
     "zh": "一站式查看、安装、卸载、升级 Scoop 与 WinGet 软件包：先查询，选中精确身份后再审阅计划并确认；不自动同意协议、不自行提权、不自动安装包管理器",

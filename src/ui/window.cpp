@@ -11,6 +11,7 @@
 #include <QUrl>
 #include <QMetaObject>
 #include <QThread>
+#include <QTimer>
 
 #include <algorithm>
 #include <limits>
@@ -865,6 +866,23 @@ void Controller::applyFakeSearch(const QString& needle, const Snapshot& wingetSe
     applySearchResults(needle, wingetSearch, scoopSearch);
 }
 
+void Controller::holdSearching(int ms)
+{
+    if (ms <= 0)
+        return;
+    m_searchPending = true;
+    emit searchStateChanged();
+    auto* timer = new QTimer(this);
+    timer->setSingleShot(true);
+    timer->setInterval(ms);
+    QObject::connect(timer, &QTimer::timeout, this, [this, timer] {
+        m_searchPending = false;
+        emit searchStateChanged();
+        timer->deleteLater();
+    });
+    timer->start();
+}
+
 void Controller::applyFakeTasks(const std::vector<Task>& tasks)
 {
     m_queue.setTasks(tasks);
@@ -983,6 +1001,14 @@ void Controller::selectRow(int row)
 {
     if (m_packages)
         m_packages->setSelected(row);
+    emit selectionChanged();
+    // Selecting a row is a request to see what it is, and `winget show` is the
+    // only source of the publisher, description and real homepage. Fetch it once
+    // per selection instead of making the user press a button to discover that
+    // the package had information all along. A row that is already loaded is not
+    // fetched again.
+    if (row >= 0 && m_packageInfoRow != row && !m_packageInfoBusy)
+        requestPackageInfo(row);
 }
 
 void Controller::toggleRow(int row)
@@ -1010,6 +1036,48 @@ void Controller::copyToClipboard(const QString& text)
     emit statusChanged();
 }
 
+int Controller::selectedRow() const
+{
+    return m_packages ? m_packages->selected() : -1;
+}
+
+void Controller::copyTaskLog(qulonglong id)
+{
+    const Task* t = m_queue.find(static_cast<unsigned long long>(id));
+    if (!t || t->log.empty()) {
+        m_copyNotice = text("该任务没有可复制的日志。", "This task has no log to copy.");
+        emit copyNoticeChanged();
+        return;
+    }
+    // Plain text, one line per entry, so it survives a paste into a terminal, an
+    // issue or a chat window. Every line was already redacted before it was
+    // stored, so the clipboard cannot leak a local path the log itself hid.
+    QString out;
+    out += QStringLiteral("task #%1  %2  %3 %4\n")
+               .arg(id)
+               .arg(QString::fromStdString(managerId(t->plan.key.manager)))
+               .arg(QString::fromStdString(actionId(t->plan.action)))
+               .arg(QString::fromStdString(t->plan.key.id));
+    for (const auto& e : t->log) {
+        out += QString::fromStdString(e.at) + QStringLiteral("\t")
+             + QString::fromStdString(e.phase) + QStringLiteral("\t")
+             + QString::fromStdString(e.kind) + QStringLiteral("\t")
+             + QString::fromStdString(e.text);
+        if (e.exitCode >= 0)
+            out += QStringLiteral("\t[exit %1]").arg(e.exitCode);
+        out += QStringLiteral("\n");
+    }
+    if (QClipboard* clipboard = QGuiApplication::clipboard()) {
+        clipboard->setText(out);
+        m_copyNotice = text("已复制该任务的日志（", "Copied this task's log (") +
+                       QString::number(t->log.size()) + text(" 行）。", " lines).");
+    } else {
+        m_copyNotice = text("无法访问剪贴板。", "The clipboard is not available.");
+    }
+    emit copyNoticeChanged();
+    emit statusChanged();
+}
+
 void Controller::openHomepage(int row)
 {
     if (!m_packages)
@@ -1025,7 +1093,7 @@ void Controller::openHomepage(int row)
     // The backend's own `show` output carries the real homepage. When it is known
     // for this row, open that instead of a search guess: it is the page the author
     // declared in the manifest, and it is the same URL `winget show` prints.
-    if (m_packageInfoRow == row) {
+    if (m_packageInfoId == QString::fromStdString(p.key.id)) {
         const QString known = m_packageInfo.value(QStringLiteral("homepage")).toString();
         if (!known.isEmpty()) {
             QDesktopServices::openUrl(QUrl(known));
@@ -1055,6 +1123,7 @@ void Controller::requestPackageInfo(int row)
         // Scoop has no equivalent structured output worth a second process here,
         // and an ARP/MSIX entry is not a winget package at all.
         m_packageInfoRow = row;
+        m_packageInfoId = QString::fromStdString(p.key.id);
         m_packageInfo.clear();
         m_packageInfo.insert(QStringLiteral("note"),
                              text("该行没有可查询的包信息（Scoop 包或系统安装记录）。",
@@ -1066,19 +1135,29 @@ void Controller::requestPackageInfo(int row)
     }
 
     m_packageInfoRow = row;
+    m_packageInfoId = QString::fromStdString(p.key.id);
     m_packageInfoBusy = true;
     m_packageInfo.clear();
     emit packageInfoChanged();
     emit statusChanged();
 
     const std::string id = p.key.id;
+    // Use the adapter's resolved winget path. A bare "winget.exe" does start
+    // through the WindowsApps alias in some processes but not under the host's
+    // environment, where it failed with "the system cannot find the file
+    // specified" — and every other query in this plugin already uses the path the
+    // probe resolved.
+    const std::string executable = wingetAdapter().executablePath();
     auto* self = this;
-    std::thread worker([self, id, row] {
+    // The answer is keyed by the exact id, not the row index: a tab switch reuses
+    // row numbers for different packages, and a reply arriving after that would
+    // otherwise describe the package that used to be at that index.
+    std::thread worker([self, id, row, executable] {
         std::map<std::string, std::string> fields;
         std::string error;
         {
             platform::RunOptions options;
-            options.application = "winget.exe";
+            options.application = executable;
             // `show` is read-only and needs no elevation. Interactivity is off so
             // it can never wait for a prompt.
             options.arguments = {"show", "--id", id, "--exact", "--disable-interactivity"};
@@ -1094,9 +1173,10 @@ void Controller::requestPackageInfo(int row)
         }
         QMetaObject::invokeMethod(
             self,
-            [self, row, fields, error] {
-                if (self->m_packageInfoRow != row)
+            [self, row, id, fields, error] {
+                if (self->m_packageInfoId != QString::fromStdString(id))
                     return;   // the selection moved on; this answer is stale
+                self->m_packageInfoRow = row;
                 self->m_packageInfoBusy = false;
                 self->m_packageInfo.clear();
                 if (!error.empty()) {
@@ -1467,7 +1547,7 @@ void Controller::cancelTask(qulonglong id)
         // The executor polls this flag between phases and the platform layer
         // reads it inside run(), so the installer process is terminated.
         if (m_runCancel)
-            *m_runCancel = true;
+            m_runCancel->store(true, std::memory_order_relaxed);
         logLine(taskId, "cancel", "warning",
                           text("已请求取消：终止子进程树，不承诺回滚。",
                                "Cancel requested: the process tree is terminated; no rollback is promised.")
@@ -1563,7 +1643,7 @@ void Controller::requestCancelLastRunning()
             // The executor polls this between phases; the platform layer reads
             // it inside run() as well, so an installer process is terminated.
             if (m_runCancel)
-                *m_runCancel = true;
+                m_runCancel->store(true, std::memory_order_relaxed);
             if (m_tasks)
                 m_tasks->setTasks(m_queue.tasks());
             emit tasksChanged();
@@ -1652,7 +1732,7 @@ void Controller::runOneTask(unsigned long long id)
     const Manager manager = plan.key.manager;
 
     auto* self = this;
-    auto cancel = std::make_shared<bool>(false);
+    auto cancel = std::make_shared<std::atomic_bool>(false);
     // requestCancelLastRunning writes the current one; the run reads it.
     m_runCancel = cancel;
 
@@ -1695,7 +1775,7 @@ void Controller::runOneTask(unsigned long long id)
         int exitCode = -1;
         bool ran = false;
         for (const std::string& step : plan.steps) {
-            if (*cancel)
+            if (cancel->load(std::memory_order_relaxed))
                 break;
             QMetaObject::invokeMethod(self, [self, id, step] {
                 self->m_queue.setPhase(id, step);
@@ -1707,7 +1787,7 @@ void Controller::runOneTask(unsigned long long id)
             }, Qt::QueuedConnection);
 
             platform::RunOptions options = spec.options;
-            options.cancelRequested = cancel.get();
+            options.cancelAtomic = cancel.get();
             const auto result = platform::run(options);
             exitCode = result.exitCode;
             ran = true;
@@ -1734,18 +1814,27 @@ void Controller::runOneTask(unsigned long long id)
                     emit self->tasksChanged();
                 }, Qt::QueuedConnection);
             }
-            if (result.timedOut || *cancel)
+            if (result.timedOut || cancel->load(std::memory_order_relaxed))
                 break;   // the remaining phases would run on a machine we no longer understand
         }
 
         // A cancelled run does not reach the verify step: the state on disk is
         // whatever the installer left, and the next refresh reads that.
         bool verifiedOk = false;
-        if (ran && !*cancel) {
+        if (ran && !cancel->load(std::memory_order_relaxed)) {
             const ProbeResult probe = manager == Manager::Scoop ? scoopAdapter().probeCached()
                                                                 : wingetAdapter().probeCached();
             std::string versionText, detail;
-            verifiedOk = adapter.verifyInstalled(probe, plan.key, versionText, detail);
+            if (manager == Manager::Winget && plan.action == Action::Upgrade &&
+                !plan.facts.targetVersion.empty()) {
+                // Exit code 0 is not the verdict. A WinGet upgrade can report
+                // success and leave the old version in place (a DBX upgrade did
+                // exactly that), so the promised target version is checked.
+                verifiedOk = wingetAdapter().verifyReachedTarget(plan.key, plan.facts.targetVersion,
+                                                                 versionText, detail);
+            } else {
+                verifiedOk = adapter.verifyInstalled(probe, plan.key, versionText, detail);
+            }
             QMetaObject::invokeMethod(self, [self, id, ok = verifiedOk, detail] {
                 self->m_queue.setVerified(id, ok);
                 if (!detail.empty())
@@ -1756,7 +1845,7 @@ void Controller::runOneTask(unsigned long long id)
             }, Qt::QueuedConnection);
         }
 
-        QMetaObject::invokeMethod(self, [self, id, verifiedOk, exitCode, cancelled = *cancel] {
+        QMetaObject::invokeMethod(self, [self, id, verifiedOk, exitCode, cancelled = cancel->load(std::memory_order_relaxed)] {
             if (cancelled)
                 self->m_queue.finish(id, false, exitCode);   // cancel is never success
             else

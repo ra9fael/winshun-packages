@@ -115,6 +115,82 @@ Flickable {
             }
         }
 
+        // ---- winget show ------------------------------------------------
+        // The publisher, description and real homepage come from the backend's
+        // own metadata, loaded as soon as the row is selected. The pane used to
+        // show only a button, so a package with rich metadata looked empty.
+        Column {
+            id: infoBlock
+            width: parent.width
+            topPadding: 10
+            spacing: 3
+            visible: root.hasRow
+
+            readonly property var info: controller.packageInfo
+            readonly property bool busy: controller.packageInfoBusy
+            readonly property var infoKeys: ["publisher", "license", "moniker", "installerType", "homepage"]
+
+            Text {
+                width: parent.width
+                text: infoBlock.busy ? root.t("正在读取包信息…", "Reading package metadata…")
+                                     : root.t("包信息", "Package metadata")
+                color: theme.faint
+                font.family: theme.fontFamily
+                font.pixelSize: theme.tinyFont
+            }
+            Text {
+                width: parent.width
+                visible: !infoBlock.busy && String(infoBlock.info["note"] || "").length > 0
+                wrapMode: Text.WordWrap
+                text: visible ? String(infoBlock.info["note"]) : ""
+                color: theme.warn
+                font.family: theme.fontFamily
+                font.pixelSize: theme.tinyFont
+            }
+            Text {
+                width: parent.width
+                visible: String(infoBlock.info["description"] || "").length > 0
+                wrapMode: Text.WordWrap
+                text: String(infoBlock.info["description"] || "")
+                color: theme.subtext
+                font.family: theme.fontFamily
+                font.pixelSize: theme.tinyFont
+            }
+            Repeater {
+                model: infoBlock.infoKeys
+                delegate: Row {
+                    required property string modelData
+                    width: infoBlock.width
+                    visible: String(infoBlock.info[modelData] || "").length > 0
+                    height: visible ? theme.smallFont + 4 : 0
+                    spacing: 8
+                    Text {
+                        width: 74
+                        height: theme.smallFont + 4
+                        verticalAlignment: Text.AlignVCenter
+                        text: modelData === "publisher" ? root.t("发布者", "Publisher")
+                            : modelData === "license" ? root.t("协议", "License")
+                            : modelData === "moniker" ? root.t("别名", "Moniker")
+                            : modelData === "installerType" ? root.t("安装器", "Installer")
+                            : root.t("官网", "Homepage")
+                        color: theme.faint
+                        font.family: theme.fontFamily
+                        font.pixelSize: theme.tinyFont
+                    }
+                    Text {
+                        width: Math.max(60, infoBlock.width - 90)
+                        height: theme.smallFont + 4
+                        verticalAlignment: Text.AlignVCenter
+                        text: String(infoBlock.info[modelData] || "")
+                        color: theme.text
+                        font.family: modelData === "homepage" ? theme.fontFamily : theme.monoFamily
+                        font.pixelSize: theme.tinyFont
+                        elide: Text.ElideMiddle
+                    }
+                }
+            }
+        }
+
         // ---- actions ---------------------------------------------------------
         // Only the actions this row can actually take. A row that is not installed
         // has no upgrade and nothing to uninstall, so it offers install and a way

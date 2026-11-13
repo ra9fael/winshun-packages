@@ -74,6 +74,13 @@ struct Options {
     bool lint = false;
     bool forceRefresh = false;
     bool tabCycleCheck = false;
+    // Selects (not checks) one row before the capture. The details pane is the
+    // only surface that shows the metadata lookup, and it needs a selected row.
+    int focusRow = -1;
+    // Holds the "searching" state for N ms so the in-box spinner can be captured.
+    // A fake run deliberately starts no backend, so the spinner otherwise never
+    // appears and the one visual it exists for could not be checked.
+    int holdSearchingMs = 0;
     int shotDelayMs = 700;
     int expectRows = -1;
     QString selectRows;
@@ -111,6 +118,8 @@ void usage()
         "  --refresh          scan even when the disk cache is fresh\n"
     "  --tab-cycle-check  check that Discover text and rows survive tab switching\n"
         "                     (requires --fake and --search)\n"
+        "  --focus-row N      select row N without checking it (shows the metadata pane)\n"
+        "  --hold-searching MS hold the search spinner for MS so it can be captured\n"
         "  --review INDEX     select row INDEX, open the review page, and continue\n"
         "                     (add :uninstall to also choose the uninstall action)\n"
         "  --search TEXT      type TEXT into the Discover search box and run the query\n"
@@ -194,6 +203,10 @@ bool parse(int argc, char** argv, Options& options)
             options.forceRefresh = true;
         } else if (arg == QStringLiteral("--tab-cycle-check")) {
             options.tabCycleCheck = true;
+        } else if (arg == QStringLiteral("--focus-row")) {
+            options.focusRow = valueOf(argc, argv, i, "--focus-row").toInt();
+        } else if (arg == QStringLiteral("--hold-searching")) {
+            options.holdSearchingMs = valueOf(argc, argv, i, "--hold-searching").toInt();
         } else if (arg == QStringLiteral("--log-level")) {
             options.logLevel = valueOf(argc, argv, i, "--log-level");
         } else if (arg == QStringLiteral("--quit-after")) {
@@ -347,6 +360,23 @@ std::vector<pkg::Task> fakeTasks()
     tasks.push_back(make(4, Manager::Winget, "Microsoft.PowerToys", "0.86.0", "0.87.1", TaskState::Failed,
                          Action::Upgrade));
     tasks.back().detail = "installer failed with exit code 0x8A15002B";
+    // Give the fake rows a per-step log so the log panel and its copy button can be
+    // checked without a real mutation: a fake run never executes anything, and an
+    // empty log made both look absent.
+    for (auto& t : tasks) {
+        t.log.push_back({"14:32:07", "plan", "ok",
+                         std::string("plan: ") + actionId(t.plan.action) + " " + t.plan.key.id, -1});
+        t.log.push_back({"14:32:08", t.phase, "info",
+                         std::string("argv: winget ") + actionId(t.plan.action) + " --id " + t.plan.key.id +
+                             " --exact", -1});
+        if (t.state == TaskState::Failed) {
+            t.log.push_back({"14:32:09", "verify", "warning", "the package was not found after the run", 0});
+            t.log.push_back({"14:32:09", "finish", "error", t.detail, 0});
+        } else if (t.state == TaskState::Succeeded) {
+            t.log.push_back({"14:32:09", "verify", "ok", "installed at 1.37.0-1", 0});
+            t.log.push_back({"14:32:09", "finish", "ok", "succeeded", 0});
+        }
+    }
     return tasks;
 }
 
@@ -845,6 +875,44 @@ int main(int argc, char** argv)
             // instead of a signal: a fake-data run never starts a search at all, and
             // the screenshot is what needs the delay, not the harness.
             QTimer::singleShot(1200, &app, [&, applySelect]() { applySelect(); });
+        }
+    }
+
+    // ---- --hold-searching ----------------------------------------------------
+    if (options.holdSearchingMs > 0)
+        controller.holdSearching(options.holdSearchingMs);
+
+    // ---- --focus-row ---------------------------------------------------------
+    // Selects a row without checking it, exactly like a click. The details pane
+    // only has content for a selected row, and it is the surface the metadata
+    // lookup renders into.
+    if (options.focusRow >= 0) {
+        auto applyFocus = [&]() -> bool {
+            if (options.focusRow >= packagesModel.rowCount())
+                return false;
+            controller.selectRow(options.focusRow);
+            say("focus", QStringLiteral("row %1 selected").arg(options.focusRow));
+            return true;
+        };
+        if (!applyFocus()) {
+            auto* timer = new QTimer(&app);
+            timer->setInterval(250);
+            auto waited = std::make_shared<int>(0);
+            QObject::connect(timer, &QTimer::timeout, &app, [&, timer, waited, applyFocus]() {
+                if (applyFocus()) {
+                    timer->stop();
+                    timer->deleteLater();
+                    return;
+                }
+                *waited += 250;
+                if (*waited >= 60000) {
+                    std::fprintf(stderr, "focus-row error: row %d never appeared\n", options.focusRow);
+                    timer->stop();
+                    timer->deleteLater();
+                    QCoreApplication::exit(2);
+                }
+            });
+            timer->start();
         }
     }
 

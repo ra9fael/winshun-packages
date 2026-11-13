@@ -8,6 +8,23 @@ All notable changes are recorded here. Format follows [Keep a Changelog](https:/
 
 ### Added
 
+## [0.3.0] - 2026-11-14
+
+### Added
+
+- **Package metadata on selection**: selecting any WinGet row now runs `winget show` automatically, and the details pane shows the description, publisher, license, moniker, installer type and the real homepage. A late reply is matched by exact ID rather than row number, because row numbers point at a different package after a tab switch. Previously the metadata only appeared if you pressed a button first.
+- **Copy a task log**: every task row has a "Copy log" button that copies the complete redacted log (task header plus time/phase/kind/text/exit per line) and reports how many lines went out. If the clipboard is unavailable it says so instead of claiming success. A failure is exactly what someone wants to paste into an issue.
+- **Keyboard operation in the lists**: the package and task lists support ↑/↓, Home/End and Enter, plus Vim's `j`/`k` and `g`/`G`; Space toggles a checkbox on the package list. Nothing is intercepted while a text field has focus. Enter used to be the only key that did anything.
+- **`--focus-row` / `--hold-searching`**: two harness switches. The first selects a row without checking it, which is the only way to capture the metadata pane; the second holds the searching state so the in-box spinner can be captured. `--fake` short-circuits the search, so that animation was otherwise never visible.
+
+### Fixed
+
+- **The colored block next to the search box**: the hand-drawn spinner painted a `theme.layer` rectangle over the lower half of the ring. When the field's focused fill differed from the layer colour that mask became visible as a square. The spinner is now a Canvas arc with no mask, and it stays invisible-on-background across the four themes and both light/dark (captured with `--hold-searching` and inspected zoomed in).
+- **An upgrade reported "success" but was graded as failure**: `update` is a documented alias of `upgrade` (visible in this machine's `winget upgrade --help`), so the verb was not the cause. The real defect was that verification only checked the package was still listed, never that it reached the target version — which is how a DBX upgrade to 0.6.70 got graded as failed. Verification now compares against the target: same or newer succeeds, still old fails and prints both versions, uncomparable never claims success. Matching is by exact ID, case-insensitively, because `winget list --id X --exact` can echo the id with different casing than the plan stored.
+- **`winget show` failed outright**: the metadata lookup hard-coded `"winget.exe"`, while every other query in the plugin uses the real WindowsApps path resolved by `locateWinget()`. Under the host's environment the bare name did not resolve, and the pane only showed "The system cannot find the file specified". The lookup now uses `WingetAdapter::executablePath()`.
+- **A concurrency cause behind the intermittent crash when queueing an upgrade**: the cancel flag was a `std::shared_ptr<bool>`, written on the GUI thread and read on a worker — a data race is undefined behaviour, which no amount of "intermittent" can explain away. It is now `std::atomic_bool`, with a new `RunOptions::cancelAtomic`; the platform layer accepts both pointers so the search path's `const bool*` semantics are unchanged. This does not prove the crash is gone, but it removes a real source of undefined behaviour.
+- **Installed rows were hard to read**: the second line spread out `source · scope`, the version, `backend-recorded` and `版本未知`. It now shows only "manager · installed version", with an emphasised "current → target" only when an update is provable; `unknown` is hidden and provenance reads as "manager-managed" or "system record". The raw fields stay in the details pane, so no internal term appears on a row where it cannot inform a decision.
+
 ### Fixed
 
 ## [0.2.0] - 2026-11-14

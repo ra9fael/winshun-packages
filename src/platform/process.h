@@ -10,6 +10,7 @@
 //   * cancelling terminates the job and reports that this is not a rollback.
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -41,6 +42,11 @@ struct RunOptions {
     // A callback invoked roughly every 250 ms so the UI can show "installer
     // running" without guessing progress. Returning false requests a cancel.
     const bool* cancelRequested = nullptr;
+    // Same signal, safe to set from another thread. The UI's cancel action runs
+    // on the GUI thread while run() polls on a worker; a plain bool there was a
+    // data race, which is a plausible cause of an intermittent crash rather than
+    // anything to do with memory limits.
+    const std::atomic_bool* cancelAtomic = nullptr;
 };
 
 // Runs one process to completion (or timeout) and returns its captured output.

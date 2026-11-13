@@ -470,6 +470,29 @@ void wingetShowFixture()
     CHECK(pkg::winget::homepageFromShow({}).empty());
 }
 
+void wingetVerifyReachedTarget()
+{
+    section("verify: exit 0 is not the verdict");
+    std::string detail;
+    // The DBX case: an upgrade ran cleanly and the machine still has the old
+    // version. Reporting success here is what made the plugin claim a failure
+    // later, out of context; the verify step has to be the one that says it.
+    CHECK(!WingetAdapter::versionReached("0.6.69", "0.6.70", detail));
+    CHECK(detail.find("0.6.69") != std::string::npos);
+    CHECK(detail.find("0.6.70") != std::string::npos);
+    CHECK(WingetAdapter::versionReached("0.6.70", "0.6.70", detail));
+    // A newer version than the target still means the promise is met: the user
+    // asked for at least the target, and the machine has more.
+    CHECK(WingetAdapter::versionReached("0.7.0", "0.6.70", detail));
+    // No recorded target is not evidence of failure; the install was verified.
+    CHECK(WingetAdapter::versionReached("1.0.0", "", detail));
+    // Two unorderable strings must never be claimed as success.
+    CHECK(!WingetAdapter::versionReached("garbage", "also-garbage", detail));
+    CHECK(detail.find("could not be compared") != std::string::npos);
+    // Pre-release ordering still counts: 0.6.70-rc1 is below 0.6.70.
+    CHECK(!WingetAdapter::versionReached("0.6.70-rc1", "0.6.70", detail));
+}
+
 } // namespace
 
 int main()
@@ -482,6 +505,7 @@ int main()
     wingetSearchFixture();
     wingetPinFixture();
     wingetShowFixture();
+    wingetVerifyReachedTarget();
     wingetCommandBuilding();
     scoopPinnedRefRules();
     std::printf("\n%d checks, %d failure(s)\n", g_checks, g_failures);

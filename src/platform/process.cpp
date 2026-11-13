@@ -340,6 +340,10 @@ RunResult run(const RunOptions& options)
             cancelled = true;
             break;
         }
+        if (options.cancelAtomic && options.cancelAtomic->load(std::memory_order_relaxed)) {
+            cancelled = true;
+            break;
+        }
         if (std::chrono::steady_clock::now() >= deadline) {
             result.timedOut = true;
             break;

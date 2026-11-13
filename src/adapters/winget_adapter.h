@@ -12,6 +12,8 @@
 //   * there is no `reinstall` verb, and `repair` is a different operation.
 #pragma once
 
+#include <atomic>
+#include <cstddef>
 #include <mutex>
 #include <string>
 #include <utility>
@@ -56,6 +58,15 @@ public:
     CommandSpec buildMutation(const Plan& plan, const std::vector<std::string>& agreementsAccepted) override;
     bool verifyInstalled(const ProbeResult& probe, const PackageKey& key, std::string& installedVersion,
                          std::string& detail) override;
+    // Verification for an action that promised a specific version. Exit code 0 is
+    // not success: an upgrade can run cleanly and leave the old version in place,
+    // which is exactly what a DBX upgrade did. Comparing the reported installed
+    // version against the plan's target is what separates the two.
+    bool verifyReachedTarget(const PackageKey& key, const std::string& targetVersion,
+                             std::string& installedVersion, std::string& detail);
+    // Same rule for a plain installed-check, exposed so it can be unit tested
+    // without spawning a process.
+    static bool versionReached(const std::string& installed, const std::string& target, std::string& detail);
 
     // --- pure helpers, unit tested with fixtures -------------------------------
 
@@ -88,6 +99,12 @@ private:
     std::vector<std::pair<std::string, std::string>> pinsCached();
 
     std::string m_executable;
+
+public:
+    // The resolved path, so a caller that must start winget itself (the metadata
+    // lookup) uses the same executable the probe validated instead of a bare
+    // "winget.exe" that may not resolve under the host's environment.
+    const std::string& executablePath() const { return m_executable; }
     bool m_probed = false;
     ProbeResult m_probeCache;
 

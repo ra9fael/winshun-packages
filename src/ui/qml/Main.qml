@@ -422,42 +422,42 @@ ApplicationWindow {
                 // local pass over rows already in memory.
                 visible: window.searchQueriesBackend && controller.searching
 
-                // A ring with one coloured quarter, rotating. The mask is a child
-                // of the rotating item so it turns with it, which is what makes the
-                // motion read as a spinner rather than a static circle.
-                Item {
-                    id: spinnerRing
+                // Draw only the animated arc; the old half-ring mask used a
+                // rectangular layer-colored plate which showed as a colored block
+                // when the field's focused fill differed from theme.layer.
+                Rectangle {
                     anchors.fill: parent
-
-                    Rectangle {
+                    radius: width / 2
+                    color: "transparent"
+                    border.width: 2
+                    border.color: theme.controlBorder
+                }
+                Rectangle {
+                    anchors.fill: parent
+                    radius: width / 2
+                    color: "transparent"
+                    border.width: 2
+                    border.color: "transparent"
+                    Canvas {
                         anchors.fill: parent
-                        radius: width / 2
-                        color: "transparent"
-                        border.width: 2
-                        border.color: theme.controlBorder
+                        antialiasing: true
+                        onPaint: {
+                            const ctx = getContext("2d")
+                            ctx.reset()
+                            ctx.lineWidth = 2
+                            ctx.strokeStyle = theme.accentLine
+                            ctx.beginPath()
+                            ctx.arc(width / 2, height / 2, width / 2 - 1, -Math.PI / 2, Math.PI * 0.65)
+                            ctx.stroke()
+                        }
                     }
-                    Rectangle {
-                        anchors.fill: parent
-                        radius: width / 2
-                        color: "transparent"
-                        border.width: 2
-                        border.color: theme.accentLine
-                    }
-                    // Covers the lower half of the coloured ring, leaving an arc.
-                    Rectangle {
-                        x: -2
-                        y: parent.height / 2
-                        width: parent.width + 4
-                        height: parent.height / 2 + 2
-                        color: theme.layer
-                    }
-                    RotationAnimator on rotation {
-                        from: 0
-                        to: 360
-                        duration: 700
-                        loops: Animation.Infinite
-                        running: controller.searching
-                    }
+                }
+                RotationAnimator on rotation {
+                    from: 0
+                    to: 360
+                    duration: 700
+                    loops: Animation.Infinite
+                    running: controller.searching
                 }
             }
             Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: theme.divider }
@@ -728,6 +728,11 @@ ApplicationWindow {
                         clip: true
                         visible: controller.statePane === "" && !controller.searching
                         model: packagesModel
+                        // Keyboard navigation needs a focusable list, and the
+                        // selection must follow focus: otherwise arrow keys move a
+                        // highlight the details pane knows nothing about.
+                        focus: true
+                        activeFocusOnTab: true
                         // Rows have a fixed height and the delegate never resizes
                         // itself, so the list virtualises without a layout pass
                         // changing item geometry.
@@ -760,6 +765,63 @@ ApplicationWindow {
                         // Enter opens the selected row's details; it never runs an
                         // action and never installs.
                         Keys.onReturnPressed: controller.openReview()
+                        Keys.onEnterPressed: controller.openReview()
+
+                        // Keyboard navigation. Windows users expect arrows/Home/End;
+                        // a Vim user expects j/k/g/G. Both are handled here rather
+                        // than globally, so typing in the search box is never
+                        // hijacked. Enter opens the review for the focused row, and
+                        // Space toggles its checkbox: the two actions the list
+                        // itself offers.
+                        Keys.onDownPressed: function(event) {
+                            if (list.count === 0) return
+                            list.currentIndex = Math.min(list.count - 1, list.currentIndex + 1)
+                            if (list.currentIndex >= 0) list.positionViewAtIndex(list.currentIndex, ListView.Contain)
+                            event.accepted = true
+                        }
+                        Keys.onUpPressed: function(event) {
+                            if (list.count === 0) return
+                            list.currentIndex = Math.max(0, list.currentIndex < 0 ? 0 : list.currentIndex - 1)
+                            list.positionViewAtIndex(list.currentIndex, ListView.Contain)
+                            event.accepted = true
+                        }
+                        Keys.onPressed: function(event) {
+                            if (list.count === 0) return
+                            if (event.key === Qt.Key_Home) {
+                                list.currentIndex = 0
+                                event.accepted = true
+                            } else if (event.key === Qt.Key_End) {
+                                list.currentIndex = list.count - 1
+                                list.positionViewAtIndex(list.currentIndex, ListView.Contain)
+                                event.accepted = true
+                            } else if (event.key === Qt.Key_J) {
+                                list.currentIndex = Math.min(list.count - 1, list.currentIndex + 1)
+                                list.positionViewAtIndex(list.currentIndex, ListView.Contain)
+                                event.accepted = true
+                            } else if (event.key === Qt.Key_K) {
+                                list.currentIndex = Math.max(0, list.currentIndex < 0 ? 0 : list.currentIndex - 1)
+                                list.positionViewAtIndex(list.currentIndex, ListView.Contain)
+                                event.accepted = true
+                            } else if (event.key === Qt.Key_G && (event.modifiers & Qt.ShiftModifier)) {
+                                list.currentIndex = list.count - 1
+                                list.positionViewAtIndex(list.currentIndex, ListView.Contain)
+                                event.accepted = true
+                            } else if (event.key === Qt.Key_G) {
+                                list.currentIndex = 0
+                                event.accepted = true
+                            } else if (event.key === Qt.Key_Space) {
+                                controller.toggleRow(list.currentIndex)
+                                event.accepted = true
+                            }
+                        }
+                        // Selecting with the keyboard is the same operation as
+                        // clicking: the details pane follows, and so does the
+                        // metadata lookup for that package. Model resets set the
+                        // index to -1, which is not a selection.
+                        onCurrentIndexChanged: {
+                            if (currentIndex >= 0)
+                                controller.selectRow(currentIndex)
+                        }
 
                         // The model is replaced wholesale on every rebuild (a new
                         // search, a filter change, a tab switch), and currentIndex
@@ -783,7 +845,10 @@ ApplicationWindow {
                 DetailPane {
                     anchors.fill: parent
                     anchors.margins: 12
-                    packageIndex: list.currentIndex
+                    // The controller owns the selection, so the pane follows it even
+                    // when the selection came from a keyboard shortcut or the
+                    // harness rather than a click on this ListView.
+                    packageIndex: list.currentIndex >= 0 ? list.currentIndex : controller.selectedRow
                 }
                 Rectangle { width: 1; height: parent.height; color: theme.divider }
             }

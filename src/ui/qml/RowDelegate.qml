@@ -29,6 +29,8 @@ Item {
     required property string limits
 
     property bool selected: false
+    readonly property bool zh: controller.locale.startsWith("zh")
+    function t(zhText, enText) { return zh ? zhText : enText }
     signal rowClicked(int index)
     signal checkboxToggled(int index)
     // Right-click opens the per-row action menu. The row reports the click
@@ -127,8 +129,10 @@ Item {
         elide: Text.ElideRight
     }
 
-    // Line 2: manager badge, source, scope, version transition, provenance and
-    // the policy / evidence hints. Every hint is text, never colour alone.
+    // Line 2 is intentionally decision-oriented: manager, install state/current
+    // version, and (only when known) an emphasized update target. Raw source,
+    // scope and provenance remain in the details pane; values such as "unknown"
+    // and "backend-recorded" are implementation facts, not useful row labels.
     Row {
         id: metaRow
         x: 34
@@ -156,6 +160,7 @@ Item {
         }
         Text {
             height: theme.tinyFont + 5
+            visible: root.source !== "" && root.source !== "unknown" && root.scope !== "unknown"
             text: root.source + " · " + root.scope
             color: theme.subtext
             font.family: theme.fontFamily
@@ -210,7 +215,11 @@ Item {
         }
         Text {
             height: theme.tinyFont + 5
-            text: root.provenance
+            visible: root.provenance !== "" && root.provenance !== "none"
+            text: root.provenance === "backend-recorded" || root.provenance === "backend 记录"
+                  ? root.t("管理器已登记", "Manager-managed")
+                  : root.provenance === "observed" || root.provenance === "观察到"
+                    ? root.t("系统记录", "System record") : ""
             color: (root.provenance === "backend-recorded" || root.provenance === "backend 记录")
                    ? theme.ok : theme.warn
             font.family: theme.fontFamily
