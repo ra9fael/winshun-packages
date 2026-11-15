@@ -130,11 +130,10 @@ Plan makePlan(const Package& package, Action action, bool elevated)
         return plan;
     }
 
-    if (needsElevation(package.key.scope) && !elevated) {
+    if (needsElevation(package.key.scope) && !elevated && package.key.manager != Manager::Winget) {
         plan.state = PlanState::Blocked;
-        plan.blockedReason = "this scope needs an elevated installer path, and the plugin is running without "
-                             "administrator rights right now; confirm the plugin's 跟随管理员权限 in the host "
-                             "settings first";
+        plan.blockedReason = "this scope needs administrator rights; no per-task elevated execution channel "
+                             "is available for this backend, so the task is blocked and was not retried";
         return plan;
     }
 

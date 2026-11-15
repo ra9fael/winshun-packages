@@ -72,6 +72,8 @@ struct Options {
     bool dryRun = false;
     bool dumpTree = false;
     bool lint = false;
+    bool settingsPopup = false;
+    QString installScope;
     bool forceRefresh = false;
     bool tabCycleCheck = false;
     // Selects (not checks) one row before the capture. The details pane is the
@@ -202,6 +204,10 @@ bool parse(int argc, char** argv, Options& options)
             options.dumpTree = true;
         } else if (arg == QStringLiteral("--lint")) {
             options.lint = true;
+        } else if (arg == QStringLiteral("--settings-popup")) {
+            options.settingsPopup = true;
+        } else if (arg == QStringLiteral("--install-scope")) {
+            options.installScope = valueOf(argc, argv, i, "--install-scope");
         } else if (arg == QStringLiteral("--refresh")) {
             options.forceRefresh = true;
         } else if (arg == QStringLiteral("--tab-cycle-check")) {
@@ -696,6 +702,10 @@ int main(int argc, char** argv)
     pkg::ui::TasksModel tasksModel;
     pkg::ui::Controller controller;
     controller.attachModels(&packagesModel, &tasksModel);
+    if (controller.metaObject()->indexOfMethod("refreshAll()") < 0) {
+        std::fprintf(stderr, "refreshAll must be callable from QML\n");
+        return 1;
+    }
 
     pkg::ui::UiSettings settings;
     settings.language = options.locale == QStringLiteral("en") ? "en-US" : "zh-CN";
@@ -993,24 +1003,43 @@ int main(int argc, char** argv)
             uninstall = spec.mid(colon + 1) == QStringLiteral("uninstall");
             spec = spec.left(colon);
         }
-        int index = spec.toInt();
-        if (index < 0 || index >= packagesModel.rowCount()) {
-            std::fprintf(stderr, "review error: row %d is out of range (0..%d)\n",
-                         index, packagesModel.rowCount() - 1);
-            return 2;
+        // Rows are comma separated ("1,3,5"); two or more rows exercise the
+        // batch review the way a multi-check does.
+        QStringList rowSpecs = spec.split(QLatin1Char(','));
+        QList<int> indexes;
+        for (const QString& rowSpec : rowSpecs) {
+            const int index = rowSpec.toInt();
+            if (index < 0 || index >= packagesModel.rowCount()) {
+                std::fprintf(stderr, "review error: row %d is out of range (0..%d)\n",
+                             index, packagesModel.rowCount() - 1);
+                return 2;
+            }
+            indexes.append(index);
         }
-        packagesModel.setSelected(index);
-        controller.selectRow(index);
-        controller.toggleRow(index);
+        for (const int index : indexes) {
+            packagesModel.setSelected(index);
+            controller.selectRow(index);
+            controller.toggleRow(index);
+        }
         controller.openReview();
         if (uninstall)
             controller.setReviewAction(QStringLiteral("uninstall"));
-        say("review", QStringLiteral("row %1 action=%2")
-                          .arg(index)
+        say("review", QStringLiteral("rows %1 action=%2")
+                          .arg(indexes.isEmpty() ? QString() : QString::number(indexes.front()))
                           .arg(uninstall ? QStringLiteral("uninstall") : QStringLiteral("default")));
     }
 
     // ---- --expect-rows -------------------------------------------------------
+    if (!options.installScope.isEmpty()) {
+        controller.setReviewAction(QStringLiteral("install"));
+        controller.setInstallScope(options.installScope);
+        if (!controller.blockedReason().isEmpty() ||
+            controller.reviewFacts().value("scope").toString() != options.installScope) {
+            std::fprintf(stderr, "install-scope regression failed\n");
+            return 1;
+        }
+        say("scope", QStringLiteral("install plan accepted explicit %1 scope").arg(options.installScope));
+    }
     // A check that runs before the event loop starts, so no backend reply can
     // have arrived: whatever is in the model now came from the disk cache. This
     // is the regression that made a warm launch paint an empty list — the cache
@@ -1077,6 +1106,12 @@ int main(int argc, char** argv)
     }
 
     // ---- --dump-tree / --shot ------------------------------------------------
+    if (options.settingsPopup) {
+        if (auto* popup = controller.findChild<QObject*>(QStringLiteral("settingsPopup")))
+            QMetaObject::invokeMethod(popup, "open");
+        else if (auto* windowPopup = scene->window->findChild<QObject*>(QStringLiteral("settingsPopup")))
+            QMetaObject::invokeMethod(windowPopup, "open");
+    }
     auto finishWithCapture = [&]() {
         QTimer::singleShot(options.shotDelayMs, &app, [&] {
             if (options.dumpTree && scene->window) {

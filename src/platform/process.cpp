@@ -8,12 +8,37 @@
 #include "process.h"
 
 #include <windows.h>
+#include <userenv.h>
 
 #include <chrono>
+#include <cstdio>
+#include <cstdint>
+#include <mutex>
+#include <algorithm>
+#include <cctype>
 #include <thread>
 
 namespace pkg::platform {
 namespace {
+
+// WinGet stores mutable user state in a shared SQLite database. A refresh runs
+// several read commands in parallel, while the queue may otherwise start a
+// mutation as soon as the user confirms it. WinGet does not make that
+// read/write combination safe: the mutation can fail with 0x87AF0008
+// ("attempt to write a readonly database"). Serialize only WinGet children;
+// Scoop and unrelated installers keep their existing concurrency behavior.
+std::mutex g_wingetProcessMutex;
+
+bool isWingetExecutable(const std::string& application)
+{
+    std::string name = application;
+    std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+    const auto slash = name.find_last_of("\\/");
+    name = slash == std::string::npos ? name : name.substr(slash + 1);
+    return name == "winget.exe" || name == "winget";
+}
 
 std::string lastErrorMessage(std::uint32_t code)
 {
@@ -76,6 +101,70 @@ std::string toUtf8(const std::wstring& wide)
     std::string out(static_cast<std::size_t>(needed), '\0');
     ::WideCharToMultiByte(CP_UTF8, 0, wide.data(), static_cast<int>(wide.size()), out.data(), needed, nullptr, nullptr);
     return out;
+}
+
+std::string currentUserProfile()
+{
+    // GetUserProfileDirectoryW has no size-query mode: a NULL buffer just fails
+    // and leaves the size untouched (verified: it returns FALSE with size 0),
+    // which silently made every earlier override a no-op. Give it a real buffer.
+    HANDLE token = nullptr;
+    if (!::OpenProcessToken(::GetCurrentProcess(), TOKEN_QUERY, &token))
+        return {};
+    wchar_t buffer[MAX_PATH * 2] = {};
+    DWORD size = static_cast<DWORD>(std::size(buffer));
+    const BOOL ok = ::GetUserProfileDirectoryW(token, buffer, &size);
+    ::CloseHandle(token);
+    if (!ok)
+        return {};
+    // `size` counts the terminator on success; trim it so the value cannot
+    // carry an embedded NUL into an environment entry.
+    std::wstring profile(buffer, buffer + std::wcslen(buffer));
+    return toUtf8(profile);
+}
+
+// CreateProcess wants a COMPLETE environment block. Passing only the overrides
+// ("USERPROFILE=…") is not a block: it drops PATH, SystemRoot and everything
+// else the child needs. Build the inherited block, replace the overrides, sort
+// it the way Windows expects, and hand that over.
+std::vector<wchar_t> buildEnvironmentBlock(
+    const std::vector<std::pair<std::string, std::string>>& overrides)
+{
+    std::vector<std::wstring> entries;
+    if (wchar_t* block = ::GetEnvironmentStringsW()) {
+        for (const wchar_t* p = block; *p; p += std::wcslen(p) + 1) {
+            // The "=C:=C:\..." drive-current-directory entries are created by
+            // the loader for a new process; copying them into a custom block
+            // makes CreateProcessW reject the block with ERROR_INVALID_PARAMETER
+            // (87) — reproduced locally before this filter was added.
+            if (*p == L'=')
+                continue;
+            entries.emplace_back(p);
+        }
+        ::FreeEnvironmentStringsW(block);
+    }
+    for (const auto& [key, value] : overrides) {
+        const std::wstring prefix = toWide(key) + L'=';
+        // C++17: erase-remove (std::erase_if is C++20).
+        entries.erase(std::remove_if(entries.begin(), entries.end(), [&](const std::wstring& entry) {
+            return entry.size() >= prefix.size() &&
+                   _wcsnicmp(entry.c_str(), prefix.c_str(), prefix.size()) == 0;
+        }), entries.end());
+        entries.push_back(prefix + toWide(value));
+    }
+    // The block must be sorted (case-insensitively); the "=C:" style entries
+    // sort first, which is exactly where Windows expects them.
+    std::sort(entries.begin(), entries.end(), [](const std::wstring& a, const std::wstring& b) {
+        return _wcsicmp(a.c_str(), b.c_str()) < 0;
+    });
+
+    std::vector<wchar_t> flat;
+    for (const auto& entry : entries) {
+        flat.insert(flat.end(), entry.begin(), entry.end());
+        flat.push_back(L'\0');
+    }
+    flat.push_back(L'\0');
+    return flat;
 }
 
 std::string quoteArgument(const std::string& argument)
@@ -186,8 +275,85 @@ std::string pluginDataDir()
     return root;
 }
 
-bool readTextFile(const std::string& path, std::string& out)
+bool ensureDirectory(const std::string& path)
 {
+    if (path.empty())
+        return false;
+    // Create every level; an existing directory is success.
+    std::string partial;
+    for (std::size_t i = 0; i <= path.size(); ++i) {
+        if (i == path.size() || path[i] == '\\') {
+            if (!partial.empty() && partial.back() != ':') {
+                if (!::CreateDirectoryW(toWide(partial).c_str(), nullptr)) {
+                    const DWORD error = ::GetLastError();
+                    // ERROR_ALREADY_EXISTS: a parent (or this level) is there.
+                    if (error != ERROR_ALREADY_EXISTS &&
+                        ::GetFileAttributesW(toWide(partial).c_str()) == INVALID_FILE_ATTRIBUTES)
+                        return false;
+                }
+            }
+            if (i == path.size())
+                break;
+        }
+        if (i < path.size())
+            partial.push_back(path[i]);
+    }
+    return true;
+}
+
+bool fileStamp(const std::string& path, std::string& stamp)
+{
+    stamp.clear();
+    WIN32_FILE_ATTRIBUTE_DATA data{};
+    if (!::GetFileAttributesExW(toWide(path).c_str(), GetFileExInfoStandard, &data))
+        return false;
+    if (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+        return false;
+    const unsigned long long size =
+        (static_cast<unsigned long long>(data.nFileSizeHigh) << 32) | data.nFileSizeLow;
+    const unsigned long long written =
+        (static_cast<unsigned long long>(data.ftLastWriteTime.dwHighDateTime) << 32) |
+        data.ftLastWriteTime.dwLowDateTime;
+    char buffer[64];
+    std::snprintf(buffer, sizeof buffer, "%llu:%llu", size, written);
+    stamp = buffer;
+    return true;
+}
+
+int pruneOldFiles(const std::string& folder, std::size_t keep)
+{
+    struct Found {
+        FILETIME written;
+        std::wstring path;
+    };
+    std::vector<Found> files;
+    WIN32_FIND_DATAW data{};
+    const std::wstring pattern = toWide(folder + "\\*");
+    HANDLE search = ::FindFirstFileW(pattern.c_str(), &data);
+    if (search == INVALID_HANDLE_VALUE)
+        return 0;
+    do {
+        if (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+            continue;
+        files.push_back({data.ftLastWriteTime, toWide(folder + "\\") + data.cFileName});
+    } while (::FindNextFileW(search, &data));
+    ::FindClose(search);
+
+    if (files.size() <= keep)
+        return 0;
+    // Oldest first: the cache is an LRU in effect, without bookkeeping.
+    std::sort(files.begin(), files.end(), [](const Found& a, const Found& b) {
+        return ::CompareFileTime(&a.written, &b.written) < 0;
+    });
+    int removed = 0;
+    for (std::size_t i = 0; i < files.size() - keep; ++i) {
+        if (::DeleteFileW(files[i].path.c_str()))
+            ++removed;
+    }
+    return removed;
+}
+
+bool readTextFile(const std::string& path, std::string& out){
     out.clear();
     HANDLE file = ::CreateFileW(toWide(path).c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_DELETE,
                                 nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
@@ -236,9 +402,62 @@ bool writeTextFile(const std::string& path, const std::string& text)
     return true;
 }
 
+// A launch failure inside the plugin is hard to diagnose from a one-line
+// status: the child may be refused because of an unexpected environment. Record
+// the facts the caller cannot show (the path actually used, the error, and the
+// variables that decide the profile) next to the plugin's own cache.
+void recordLaunchFailure(const RunOptions& options, std::size_t environmentChars, std::uint32_t error)
+{
+    const std::string dir = pluginDataDir();
+    if (dir.empty())
+        return;
+    SYSTEMTIME now{};
+    ::GetLocalTime(&now);
+    char stamp[64];
+    std::snprintf(stamp, sizeof stamp, "%04u-%02u-%02uT%02u:%02u:%02u", now.wYear, now.wMonth, now.wDay,
+                  now.wHour, now.wMinute, now.wSecond);
+
+    std::string text = std::string("--- ") + stamp + " launch failure (error " + std::to_string(error) + ")\n";
+    text += "application: " + options.application + "\n";
+    text += "arguments:";
+    for (const auto& argument : options.arguments)
+        text += " " + argument;
+    text += "\nenvironment block chars: " + std::to_string(environmentChars) + "\n";
+    for (const wchar_t* name : {L"USERPROFILE", L"LOCALAPPDATA", L"APPDATA", L"SystemRoot", L"PATH"}) {
+        wchar_t value[1024] = {};
+        const DWORD capacity = static_cast<DWORD>(std::size(value));
+        const DWORD length = ::GetEnvironmentVariableW(name, value, capacity);
+        std::string shown;
+        if (length == 0)
+            shown = "<unset>";
+        else if (length >= capacity)
+            // The call reports the required size, not the copied size. Using it
+            // here read past the buffer (a crash on a long PATH); say so instead.
+            shown = "<longer than " + std::to_string(capacity) + " chars: " + std::to_string(length) + " required>";
+        else
+            shown = toUtf8(std::wstring(value, length));
+        if (shown.size() > 600)
+            shown = shown.substr(0, 600) + "…";
+        text += toUtf8(std::wstring(name)) + "=" + shown + "\n";
+    }
+
+    const std::string path = dir + "\\launch-failures.log";
+    HANDLE file = ::CreateFileW(toWide(path).c_str(), FILE_APPEND_DATA, FILE_SHARE_READ, nullptr, OPEN_ALWAYS,
+                                FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE)
+        return;
+    DWORD written = 0;
+    ::WriteFile(file, text.data(), static_cast<DWORD>(text.size()), &written, nullptr);
+    ::CloseHandle(file);
+}
+
 RunResult run(const RunOptions& options)
 {
     RunResult result;
+    std::unique_lock<std::mutex> wingetLock(
+        g_wingetProcessMutex, std::defer_lock);
+    if (isWingetExecutable(options.application))
+        wingetLock.lock();
     const auto started = std::chrono::steady_clock::now();
     SECURITY_ATTRIBUTES sa{};
     sa.nLength = sizeof sa;
@@ -282,24 +501,24 @@ RunResult run(const RunOptions& options)
     // CREATE_SUSPENDED lets the child join our job before it can spawn anything,
     // so an installer's own children are all inside the job too.
     creationFlags |= CREATE_SUSPENDED;
+    // CREATE_UNICODE_ENVIRONMENT is mandatory when we hand over a block: the
+    // block below is UTF-16. Without the flag Windows parses it as ANSI and
+    // CreateProcessW fails with ERROR_INVALID_PARAMETER (87) — the exact failure
+    // the plugin showed as "winget --version could not be launched".
+    creationFlags |= CREATE_UNICODE_ENVIRONMENT;
     const std::wstring application = toWide(options.application);
     const std::wstring workingDirectory =
         options.workingDirectory.empty() ? std::wstring() : toWide(options.workingDirectory);
 
-    // A minimal, explicit environment block when the caller supplied variables;
-    // otherwise inherit without ever dumping it to a log.
+    // A complete environment block only when the caller supplied variables;
+    // otherwise inherit without ever dumping the block to a log.
     std::vector<wchar_t> environmentBlock;
-    if (!options.environment.empty()) {
-        for (const auto& [key, value] : options.environment) {
-            const std::wstring entry = toWide(key + "=" + value);
-            environmentBlock.insert(environmentBlock.end(), entry.begin(), entry.end());
-            environmentBlock.push_back(L'\0');
-        }
-        environmentBlock.push_back(L'\0');
-    }
+    if (!options.environment.empty())
+        environmentBlock = buildEnvironmentBlock(options.environment);
 
     const BOOL created = ::CreateProcessW(
-        application.c_str(), mutableLine.data(), nullptr, nullptr, TRUE, creationFlags, nullptr,
+        application.c_str(), mutableLine.data(), nullptr, nullptr, TRUE, creationFlags,
+        environmentBlock.empty() ? nullptr : environmentBlock.data(),
         workingDirectory.empty() ? nullptr : workingDirectory.c_str(), &si, &pi);
 
     ::CloseHandle(writePipe);
@@ -308,6 +527,7 @@ RunResult run(const RunOptions& options)
     if (!created) {
         result.launchError = ::GetLastError();
         result.errorText = lastErrorMessage(result.launchError);
+        recordLaunchFailure(options, environmentBlock.size(), result.launchError);
         ::CloseHandle(readPipe);
         if (job)
             ::CloseHandle(job);
@@ -418,6 +638,19 @@ RunResult run(const RunOptions&)
 bool isElevated() { return false; }
 
 std::string pluginDataDir() { return {}; }
+bool ensureDirectory(const std::string&) { return false; }
+bool fileStamp(const std::string&, std::string& stamp)
+{
+    stamp.clear();
+    return false;
+}
+bool pruneOldFiles(const std::string& folder, std::size_t keep)
+{
+    (void)folder;
+    (void)keep;
+    return 0;
+}
+
 bool readTextFile(const std::string&, std::string& out)
 {
     out.clear();

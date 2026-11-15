@@ -79,6 +79,11 @@ struct Snapshot {
     std::string wingetDetail;
     std::string scoopDetail;
     std::string scanScope;       // what this snapshot actually covers
+    // When each backend was last read. They differ once a refresh only had to
+    // re-query one of them: the other's rows are still the truth, so its stamp
+    // must stay old rather than being refreshed by association.
+    std::string wingetObservedAt;
+    std::string scoopObservedAt;
 };
 
 enum class Tab { Installed, Discover, Updates, Tasks };

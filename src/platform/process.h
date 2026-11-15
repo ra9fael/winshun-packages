@@ -67,6 +67,12 @@ std::wstring toWide(const std::string& utf8);
 // Decodes a wide string to UTF-8.
 std::string toUtf8(const std::wstring& wide);
 
+// The profile directory belonging to this process token. This deliberately
+// does not consult USERPROFILE: a host-launched plugin can inherit a stale or
+// sanitized USERPROFILE while its token still belongs to the real interactive
+// user.
+std::string currentUserProfile();
+
 // True when the current process can create a child at all. When the host did not
 // grant `processes`, the job's ActiveProcessLimit makes CreateProcess fail with
 // error 1816; this is reported instead of a generic failure.
@@ -83,9 +89,17 @@ bool isElevated();
 // place the plugin writes, matching the manifest's files:write entry.
 std::string pluginDataDir();
 
+// Creates every missing level of `path` (an existing directory is success).
+bool ensureDirectory(const std::string& path);
+// Fingerprint of one file: "<size>:<last write time>". False when it does not
+// exist. Used to decide whether a cached backend verdict still describes the same
+// binary (probe_cache.h): a different size or write time means probe again.
+bool fileStamp(const std::string& path, std::string& stamp);
+// Deletes the oldest files in `folder` until at most `keep` remain. Returns the
+// number removed. Missing folder is not an error.
+int pruneOldFiles(const std::string& folder, std::size_t keep);
 // Reads a whole file; returns false when it cannot be opened or read.
 bool readTextFile(const std::string& path, std::string& out);
-
 // Writes a file atomically (temp + rename) so a crash mid-write cannot leave a
 // half-written cache for the next launch to trust.
 bool writeTextFile(const std::string& path, const std::string& text);

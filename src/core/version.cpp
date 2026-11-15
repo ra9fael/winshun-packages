@@ -5,6 +5,8 @@
 
 #include <algorithm>
 #include <cctype>
+#include <utility>
+#include <vector>
 
 namespace pkg {
 namespace {
@@ -24,6 +26,83 @@ bool isPlaceholder(const std::string& s)
     return l.empty() || l == "unknown" || l == "n/a" || l == "-" || l == "?" || l == "latest" || l == "none";
 }
 
+// SemVer §11 pre-release identifiers: dot separated; numeric identifiers
+// compare numerically, alphanumeric ones in ASCII order, and a numeric
+// identifier always sorts below an alphanumeric one. A malformed identifier
+// (empty part) makes the pair unorderable rather than guessed.
+struct PreReleaseId {
+    bool numeric = false;
+    unsigned long long number = 0;
+    std::string text;   // already lowercased by parseVersion
+};
+
+bool parsePreRelease(const std::string& suffix, std::vector<PreReleaseId>& out)
+{
+    std::size_t i = 0;
+    while (true) {
+        const std::size_t dot = suffix.find('.', i);
+        const std::string part =
+            suffix.substr(i, dot == std::string::npos ? std::string::npos : dot - i);
+        if (part.empty())
+            return false;   // "alpha.", "a..b": not a compliant identifier, do not guess
+        PreReleaseId id;
+        bool allDigits = true;
+        for (const char c : part) {
+            if (!isDigit(c)) {
+                allDigits = false;
+                break;
+            }
+        }
+        if (allDigits) {
+            id.numeric = true;
+            // Saturate like the numeric segments do. Leading zeroes are
+            // non-compliant but harmless once parsed ("rc.02" == "rc.2").
+            unsigned long long n = 0;
+            for (const char c : part) {
+                const unsigned long long digit = static_cast<unsigned long long>(c - '0');
+                if (n > (0xFFFFFFFFFFFFFFFFull - digit) / 10)
+                    n = 0xFFFFFFFFFFFFFFFFull;
+                else
+                    n = n * 10 + digit;
+            }
+            id.number = n;
+        } else {
+            id.text = part;
+        }
+        out.push_back(std::move(id));
+        if (dot == std::string::npos)
+            return true;
+        i = dot + 1;
+    }
+}
+
+Order comparePreRelease(const std::string& a, const std::string& b)
+{
+    std::vector<PreReleaseId> idsA, idsB;
+    if (!parsePreRelease(a, idsA) || !parsePreRelease(b, idsB))
+        return Order::Unknown;
+    for (std::size_t i = 0;; ++i) {
+        if (i >= idsA.size() && i >= idsB.size())
+            return Order::Same;
+        if (i >= idsA.size())
+            return Order::Older;    // 1.0.0-alpha < 1.0.0-alpha.1: the longer set is greater
+        if (i >= idsB.size())
+            return Order::Newer;
+        const PreReleaseId& x = idsA[i];
+        const PreReleaseId& y = idsB[i];
+        if (x.numeric && y.numeric) {
+            if (x.number != y.number)
+                return x.number < y.number ? Order::Older : Order::Newer;
+        } else if (!x.numeric && !y.numeric) {
+            if (x.text != y.text)
+                return x.text < y.text ? Order::Older : Order::Newer;   // ASCII order
+        } else {
+            // §11.4: numeric identifiers always have lower precedence.
+            return x.numeric ? Order::Older : Order::Newer;
+        }
+    }
+}
+
 } // namespace
 
 Version parseVersion(const std::string& raw)
@@ -37,6 +116,12 @@ Version parseVersion(const std::string& raw)
     // A leading 'v' is common ("v1.2.3") and carries no ordering meaning.
     if (!text.empty() && (text[0] == 'v' || text[0] == 'V') && text.size() > 1 && isDigit(text[1]))
         text.erase(0, 1);
+
+    // SemVer §10: build metadata ("+…") attaches to a version but never
+    // affects precedence, so it is dropped before parsing. `raw` keeps the
+    // original text for display and for the backend argv.
+    if (const std::size_t plus = text.find('+'); plus != std::string::npos)
+        text.resize(plus);
 
     if (text.empty() || !isDigit(text[0]))
         return v; // "beta-3", "head", a date-less tag: cannot be ordered
@@ -86,15 +171,18 @@ Order compareVersions(const Version& a, const Version& b)
     }
 
     // Equal numbers: a suffix makes a pre-release, which sorts below the plain
-    // release. Two different suffixes cannot be ordered without a source of
-    // truth, so report Unknown rather than guessing.
+    // release. Two suffixes follow the SemVer §11 identifier rules — the
+    // convention winget manifests and scoop recipes quote — instead of declaring
+    // every differing pair unorderable ("0.2.2-rc.2 → 0.2.2-rc.3" was blocked
+    // by the old rule). Unparseable identifiers stay Unknown rather than
+    // guessed.
     if (a.suffix == b.suffix)
         return Order::Same;
     if (a.suffix.empty())
         return Order::Newer;
     if (b.suffix.empty())
         return Order::Older;
-    return Order::Unknown;
+    return comparePreRelease(a.suffix, b.suffix);
 }
 
 Order compareVersionStrings(const std::string& a, const std::string& b)

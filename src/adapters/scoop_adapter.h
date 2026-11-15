@@ -71,6 +71,12 @@ public:
     // the root cannot change while the plugin lives, so only Ready/Unsupported
     // stick, and a Denied probe is retried on the next refresh.
     const ProbeResult& probeCached();
+    void seedProbe(const ProbeResult& probe) override;
+    // The shim, not powershell.exe: Scoop removed from the machine deletes it,
+    // while PowerShell stays and would make a stale verdict look current.
+    std::string probeStampPath() const override { return m_shim; }
+    bool isProbeSeeded() const { return m_probed; }
+    void invalidateProbe() { m_probed = false; m_probeCache = ProbeResult{}; }
 
     // Drops the per-scan cache. The controller calls this at the start of every
     // refresh so the parallel installed/updates queries share one `scoop export`
@@ -81,8 +87,7 @@ public:
     Snapshot search(const ProbeResult& probe, const std::string& text, const bool* cancelRequested) override;
     Snapshot readUpdates(const ProbeResult& probe) override;
     CommandSpec buildMutation(const Plan& plan, const std::vector<std::string>& agreementsAccepted) override;
-    bool verifyInstalled(const ProbeResult& probe, const PackageKey& key, std::string& installedVersion,
-                         std::string& detail) override;
+    VerifyResult verifyInstalled(const ProbeResult& probe, const PackageKey& key) override;
 
     // --- pure helpers, unit tested ---------------------------------------------
 

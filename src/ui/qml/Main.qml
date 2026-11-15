@@ -90,6 +90,35 @@ ApplicationWindow {
                 enabled: !controller.busy
                 onClicked: controller.refreshAll()
             }
+            // A scan takes tens of seconds; a greyed button alone reads as
+            // "dead". The arc next to it is what says "working" where the user
+            // just clicked, and the status bar names the stage.
+            Item {
+                visible: controller.busy
+                Layout.preferredWidth: 14
+                Layout.preferredHeight: 14
+                Layout.alignment: Qt.AlignVCenter
+                Canvas {
+                    anchors.fill: parent
+                    antialiasing: true
+                    onPaint: {
+                        const ctx = getContext("2d")
+                        ctx.reset()
+                        ctx.lineWidth = 2
+                        ctx.strokeStyle = theme.accentLine
+                        ctx.beginPath()
+                        ctx.arc(width / 2, height / 2, width / 2 - 1, -Math.PI / 2, Math.PI * 0.65)
+                        ctx.stroke()
+                    }
+                }
+                RotationAnimator on rotation {
+                    from: 0
+                    to: 360
+                    duration: 700
+                    loops: Animation.Infinite
+                    running: controller.busy
+                }
+            }
             ThemedButton {
                 text: window.t("设置", "Settings")
                 glyph: "\uE713"
@@ -758,7 +787,11 @@ ApplicationWindow {
                         delegate: RowDelegate {
                             width: list.width
                             height: theme.rowHeight
-                            selected: list.currentIndex === index
+                            // The highlight follows the list's own index and the
+                            // model's selection, whichever moved last: a refresh
+                            // restores the selection by id through the model, and
+                            // without this half the highlight stayed lost.
+                            selected: list.currentIndex === index || packagesModel.selectedRow === index
                             onRowClicked: function(i) {
                                 list.currentIndex = i
                                 controller.selectRow(i)
@@ -938,15 +971,30 @@ ApplicationWindow {
         id: settingsPopup
         objectName: "settingsPopup"
         anchors.centerIn: parent
-        width: 440
+        width: 460
+        height: Math.min(window.height - 40, 610)
         modal: true
         padding: 14
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+        background: Rectangle {
+            color: theme.layer
+            radius: theme.cardRadius
+            border.width: 1
+            border.color: theme.windowEdge
+        }
 
         // The layout must be given its width explicitly: a Popup does not
         // constrain its children, and without a width the wrapMode below has
         // nothing to wrap at, so the long lines ran past the popup edge.
+        Flickable {
+            anchors.fill: parent
+            clip: true
+            contentWidth: width
+            contentHeight: settingsColumn.implicitHeight
+            ScrollBar.vertical: ScrollBar {}
+
         ColumnLayout {
+            id: settingsColumn
             width: parent.width
             spacing: 8
 
@@ -957,21 +1005,88 @@ ApplicationWindow {
                 font.pixelSize: theme.baseFont
                 font.weight: Font.DemiBold
             }
+
+            // ---- current settings ------------------------------------------
+            // Settings remain host-owned. Values arriving through settingsChanged
+            // are reflected immediately and are never shadowed by local state.
+            Text {
+                text: window.t("当前设置", "Current settings")
+                color: theme.subtext
+                font.family: theme.fontFamily
+                font.pixelSize: theme.smallFont
+                font.weight: Font.DemiBold
+            }
+            Text {
+                Layout.fillWidth: true
+                text: controller.settingsSummary
+                color: theme.text
+                font.family: theme.fontFamily
+                font.pixelSize: theme.metaFont
+                wrapMode: Text.WrapAnywhere
+            }
             Text {
                 Layout.fillWidth: true
                 wrapMode: Text.WordWrap
-                // Settings are read-only information in this build: no dependency
-                // installation and no source management is offered here.
-                text: window.t(
-                    "本窗口只展示 backend 路径、版本与适配状态。来源、bucket 与 pin/hold 的管理不在本版本内；" +
-                    "本插件不会下载包管理器，也不会自行提权——提权只跟随 Win顺 的管理员状态，且需你在设置里确认。",
-                    "This window only reports backend path, version and adapter state. Source, bucket and pin/hold " +
-                    "management are not part of this version; the plugin never downloads a package manager and never " +
-                    "elevates on its own — elevation only follows Win顺 running as administrator, after you confirm " +
-                    "it in the host settings.")
+                text: window.t("修改请到 Win顺 的「设置 → 插件 → 软件包」卡片；改动即时生效，无需重启。",
+                               "Edit them on the Packages card under WinShun's Settings → Plugins; changes apply at once, no restart.")
+                color: theme.faint
+                font.family: theme.fontFamily
+                font.pixelSize: theme.tinyFont
+            }
+
+            Rectangle { Layout.fillWidth: true; height: 1; color: theme.divider }
+
+            // ---- cache management -------------------------------------------
+            Text {
+                text: window.t("缓存", "Cache")
                 color: theme.subtext
                 font.family: theme.fontFamily
-                font.pixelSize: theme.metaFont
+                font.pixelSize: theme.smallFont
+                font.weight: Font.DemiBold
+            }
+            Text {
+                Layout.fillWidth: true
+                text: controller.cacheSummary
+                color: theme.text
+                font.family: theme.monoFamily
+                font.pixelSize: theme.tinyFont
+                wrapMode: Text.WrapAnywhere
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                ThemedButton {
+                    text: window.t("复制路径", "Copy path")
+                    onClicked: controller.copyDataPath()
+                }
+                ThemedButton {
+                    text: window.t("打开文件夹", "Open folder")
+                    onClicked: controller.openDataFolder()
+                }
+                Item { Layout.fillWidth: true }
+            }
+            Text {
+                Layout.fillWidth: true
+                wrapMode: Text.WordWrap
+                text: window.t("缓存只写插件自己的数据文件夹，按上面的刷新间隔过期；清除后下次刷新重建。",
+                               "Caches live only in the plugin's data folder and expire on the interval above; clearing them rebuilds on the next refresh.")
+                color: theme.faint
+                font.family: theme.fontFamily
+                font.pixelSize: theme.tinyFont
+            }
+            ThemedButton {
+                text: window.t("清除缓存", "Clear cache")
+                onClicked: controller.clearCache()
+            }
+
+            Rectangle { Layout.fillWidth: true; height: 1; color: theme.divider }
+
+            // ---- backends ---------------------------------------------------
+            Text {
+                text: window.t("后端状态", "Backend state")
+                color: theme.subtext
+                font.family: theme.fontFamily
+                font.pixelSize: theme.smallFont
+                font.weight: Font.DemiBold
             }
             Text {
                 Layout.fillWidth: true
@@ -980,6 +1095,21 @@ ApplicationWindow {
                 color: theme.faint
                 font.family: theme.monoFamily
                 font.pixelSize: theme.tinyFont
+            }
+
+            // ---- scope statement --------------------------------------------
+            Text {
+                Layout.fillWidth: true
+                wrapMode: Text.WordWrap
+                text: window.t(
+                    "来源、bucket 与 pin/hold 的管理不在本版本内；本插件不会下载包管理器，也不会自行提权——" +
+                    "插件以普通用户运行；需要管理员权限时由 WinGet / 安装器请求 UAC，拒绝或不支持时停止，不自动切换权限重试。",
+                    "Source, bucket and pin/hold management are not part of this version; the plugin never downloads " +
+                    "a package manager. The plugin runs as a normal user; WinGet / the installer may request UAC. " +
+                    "A refusal or unsupported elevation stops the task without automatic privilege switching or retry.")
+                color: theme.subtext
+                font.family: theme.fontFamily
+                font.pixelSize: theme.metaFont
             }
             RowLayout {
                 Layout.fillWidth: true
@@ -990,6 +1120,7 @@ ApplicationWindow {
                     onClicked: settingsPopup.close()
                 }
             }
+        }
         }
     }
 

@@ -377,6 +377,12 @@ const ProbeResult& ScoopAdapter::probeCached()
     return m_probeCache;
 }
 
+void ScoopAdapter::seedProbe(const ProbeResult& probe)
+{
+    m_probeCache = probe;
+    m_probed = probe.state == BackendState::Ready || probe.state == BackendState::Unsupported;
+}
+
 ProbeResult ScoopAdapter::probe()
 {
     ProbeResult result;
@@ -679,36 +685,45 @@ CommandSpec ScoopAdapter::buildMutation(const Plan& plan, const std::vector<std:
     return spec;
 }
 
-bool ScoopAdapter::verifyInstalled(const ProbeResult& probe, const PackageKey& key, std::string& installedVersion,
-                                   std::string& detail)
+VerifyResult ScoopAdapter::verifyInstalled(const ProbeResult& probe, const PackageKey& key)
 {
-    installedVersion.clear();
+    VerifyResult result;
+    result.outcome = VerifyOutcome::Unknown;
     if (probe.state != BackendState::Ready) {
-        detail = probe.detail;
-        return false;
+        result.detail = "the backend was not ready, so no query ran: " + probe.detail;
+        return result;
     }
     std::string refusal;
     // Verification must not read the scan cache: the whole point is that the
     // inventory changed, and a stale answer would report the pre-run state.
     const auto run = runScoop(m_powershell, m_shim, {"export"}, 60000, nullptr, refusal);
+    result.exitCode = run.exitCode;
+    result.checks = 1;
     if (!run.launched) {
-        detail = refusal.empty() ? run.errorText : refusal;
-        return false;
+        result.detail = refusal.empty() ? run.errorText : refusal;
+        return result;
     }
     std::string failure;
     const auto snapshot = fromExportJson(run.output, nowText(), true, &failure);
     if (!failure.empty()) {
-        detail = "verification output was unsupported: " + failure;
-        return false;
+        result.detail = "verification output was unsupported: " + failure;
+        return result;
     }
     for (const auto& p : snapshot.packages) {
         if (p.key.id == key.id) {
-            installedVersion = p.installedVersion;
-            return true;
+            result.outcome = VerifyOutcome::Present;
+            result.installedVersion = p.installedVersion;
+            result.detail = "the app is installed at " + result.installedVersion;
+            return result;
         }
     }
-    detail = "the app was not found after the run";
-    return false;
+    // The export is the whole inventory, so "absent" is a direct, complete
+    // answer here — unlike winget's filtered list, there is no partial view to
+    // distrust. For an install or an upgrade that is a provable failure; for
+    // an uninstall it is the proof of success.
+    result.outcome = VerifyOutcome::Absent;
+    result.detail = "the app is not in the export any more: the export is the whole inventory, so it is gone";
+    return result;
 }
 
 // ---------------------------------------------------------------- pure helpers

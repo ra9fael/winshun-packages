@@ -3,7 +3,7 @@
   "manifest": 1,
   "id": "ra9fael.packages",
   "name": {"zh": "软件包", "en": "Packages"},
-  "version": "0.4.0",
+  "version": "0.4.12",
   "minWinShun": "0.22.0",
   "description": {
     "zh": "一站式查看、安装、卸载、升级 Scoop 与 WinGet 软件包：先查询，选中精确身份后再审阅计划并确认；不自动同意协议、不自行提权、不自动安装包管理器",
@@ -20,7 +20,7 @@
     "sandbox": "normal",
     "start": "lazy",
     "timeoutMs": 1500,
-    "memoryMB": 256,
+    "memoryMB": 512,
     "idleExitSec": 0,
     "encoding": "utf-8"
   },
@@ -28,7 +28,7 @@
     "ui",
     "processes",
     "network",
-    "elevated",
+    "clipboard:write",
     {
       "files:read": [
         "%USERPROFILE%\\scoop\\apps\\*\\current\\install.json",
@@ -70,6 +70,32 @@
       "actions": [
         {"id": "open", "title": {"zh": "打开软件包窗口", "en": "Open Packages"}, "key": "Enter"}
       ]
+    },
+    {
+      "id": "packages-open-only",
+      "keyword": ["pkgs-only", "包只读"],
+      "title": {"zh": "软件包窗口（不扫描）", "en": "Packages window (no scan)"},
+      "hint": {
+        "zh": "只打开窗口并显示已有缓存，不查询 WinGet / Scoop；适合只想看上次结果",
+        "en": "Opens the window with the existing cache only; WinGet / Scoop are not queried"
+      },
+      "icon": "glyph:U+E7B8",
+      "actions": [
+        {"id": "open", "title": {"zh": "打开窗口（不扫描）", "en": "Open without scanning"}, "key": "Enter"}
+      ]
+    },
+    {
+      "id": "packages-refresh",
+      "keyword": ["pkgs-refresh", "包刷新"],
+      "title": {"zh": "软件包窗口并刷新", "en": "Packages window and refresh"},
+      "hint": {
+        "zh": "打开窗口并立即强制重新查询 WinGet / Scoop，忽略缓存新鲜度",
+        "en": "Opens the window and forces a fresh WinGet / Scoop query, ignoring the cache's freshness"
+      },
+      "icon": "glyph:U+E7B8",
+      "actions": [
+        {"id": "open", "title": {"zh": "打开并刷新", "en": "Open and refresh"}, "key": "Enter"}
+      ]
     }
   ],
   "settings": [
@@ -107,6 +133,41 @@
         "en": "The list is marked stale once this much time passes without a successful query; nothing is queried or installed in the background"
       },
       "default": 30
+    },
+    {
+      "key": "autoFetchInfo",
+      "type": "bool",
+      "title": {"zh": "选中后自动获取包信息", "en": "Fetch package info on selection"},
+      "hint": {
+        "zh": "选中 WinGet 行时后台运行 winget show，结果按刷新间隔缓存到插件数据文件夹；关闭后仅在点「更多…」或「官网 / 项目页」时查询",
+        "en": "Selecting a WinGet row runs winget show in the background and caches the answer in the data folder for the refresh interval; off, only the More and Project page buttons query"
+      },
+      "default": true
+    },
+    {
+      "key": "scanOnOpen",
+      "type": "choice",
+      "title": {"zh": "打开窗口时扫描", "en": "Scan when the window opens"},
+      "hint": {
+        "zh": "决定打开软件包窗口时是否查询 WinGet / Scoop；「缓存过期时」只在列表超过刷新间隔没成功查询过才扫描",
+        "en": "Decides whether opening the Packages window queries WinGet / Scoop; 'when the cache is stale' scans only when the list has not been queried successfully within the refresh interval"
+      },
+      "options": [
+        {"value": "stale", "title": {"zh": "缓存过期时", "en": "When the cache is stale"}},
+        {"value": "always", "title": {"zh": "每次打开", "en": "Every time"}},
+        {"value": "never", "title": {"zh": "从不（只读缓存）", "en": "Never (cache only)"}}
+      ],
+      "default": "stale"
+    },
+    {
+      "key": "scanOnStartup",
+      "type": "bool",
+      "title": {"zh": "插件启动时后台扫描", "en": "Scan when the plugin starts"},
+      "hint": {
+        "zh": "插件按需启动后查询一次 WinGet / Scoop，不弹出窗口；不代表随 Win顺 开机预加载。扫描使用普通用户权限。",
+        "en": "Queries WinGet / Scoop once after the lazy plugin starts, without opening a window. This does not preload it at WinShun startup. Scanning uses ordinary user rights."
+      },
+      "default": false
     },
     {
       "key": "debugLogging",

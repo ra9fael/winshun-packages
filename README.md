@@ -32,7 +32,7 @@ PKG-Fxx 是 FR 标识。优先级不改变安全约束；后续拆分时保留�
 | PKG-F14 | P0 | 任务显示阶段、估计进度、退出码、结果核对及可脱敏诊断；没有可靠总量时用不定进度，不捏造百分比。 |
 | PKG-F15 | P0 | 权限拒绝、interactive installer pending、需要重启、结果未知、重装已卸载但安装失败均为独立状态；进程退出不等于操作成功。 |
 | PKG-F16 | P0 | source agreements 与 installer agreements 分开列明并显式同意，拒绝则阻塞相关操作；搜索遇协议不能静默同意，且不得全局记作同意所有协议。 |
-| PKG-F17 | P1 | normal + resident + lazy，声明 ui/processes/network/elevated/files:read/files:write 的实际用途；子进程仍受 Job 限制。`elevated` 让插件跟随 Win顺 的管理员状态（需用户在宿主设置里确认一次），machine/global scope 才可执行；未提权时这些 scope 在预检阻止并说明原因。UI 标题栏的权限 chip 反映运行时真实状态。 |
+| PKG-F17 | P1 | normal + resident + lazy，声明 ui/processes/network/clipboard:write/files:read/files:write；不声明 elevated，插件通过宿主普通用户执行通道运行，不继承管理员权限。WinGet / 安装器按需请求 UAC，拒绝或不支持时停止，不自动换权限重试；Scoop global 在无管理员执行通道时阻塞。标题栏显示实际权限。 |
 | PKG-F18 | P0 | Scoop 识别 PowerShell 脚本/shim 调用，使用可信固定入口与结构化参数传递；WinGet 用安全 argv。用户文字不得拼入 shell，不接受任意脚本、URL manifest 或额外 CLI 参数作为包 ID。 |
 | PKG-F19 | P0 | 解析按 backend/version/命令/语言/编码 fixture 适配；无证据的组合标 unsupported，不猜列。WinGet 结构化 API/模块是显式可选依赖，不自动安装，不假定所有 CLI 命令支持 JSON。 |
 | PKG-F20 | P0 | 缓存带观测时间与 stale 标记；检测外部 manager 操作/锁冲突并失效刷新。无法可靠检测时展示不确定，执行前重查，不强抢锁。 |

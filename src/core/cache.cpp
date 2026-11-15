@@ -116,6 +116,9 @@ std::string serialize(const Snapshot& snapshot, const Snapshot* updates)
     out += ",\"wingetDetail\":" + quoted(snapshot.wingetDetail);
     out += ",\"scoop\":" + backendId(snapshot.scoop);
     out += ",\"scoopDetail\":" + quoted(snapshot.scoopDetail);
+    // Per-backend stamps: a partial refresh updates only one of them.
+    out += ",\"wingetAt\":" + quoted(snapshot.wingetObservedAt);
+    out += ",\"scoopAt\":" + quoted(snapshot.scoopObservedAt);
     out += ",\"packages\":[";
     bool first = true;
     for (const auto& p : snapshot.packages) {
@@ -171,6 +174,14 @@ bool parse(const std::string& text, Snapshot& out, std::string& error, Snapshot*
     out.wingetDetail = root->stringAt("wingetDetail");
     out.scoop = backendFromId(root->stringAt("scoop"));
     out.scoopDetail = root->stringAt("scoopDetail");
+    // Written by 0.4.12 and later. A file from an older build has neither, so
+    // both fall back to the whole-snapshot time and behave as before.
+    out.wingetObservedAt = root->stringAt("wingetAt");
+    out.scoopObservedAt = root->stringAt("scoopAt");
+    if (out.wingetObservedAt.empty())
+        out.wingetObservedAt = out.observedAt;
+    if (out.scoopObservedAt.empty())
+        out.scoopObservedAt = out.observedAt;
 
     const auto packages = root->get("packages");
     if (!packages || !packages->isArray()) {
@@ -191,6 +202,8 @@ bool parse(const std::string& text, Snapshot& out, std::string& error, Snapshot*
         updates->scoop = out.scoop;
         updates->scoopDetail = out.scoopDetail;
         updates->observedAt = root->stringAt("updatesAt");
+        updates->wingetObservedAt = out.wingetObservedAt;
+        updates->scoopObservedAt = out.scoopObservedAt;
         // A cache written before updates were stored has no array at all; that is
         // not an error, it just means the Updates tab starts empty until the scan.
         const auto list = root->get("updates");

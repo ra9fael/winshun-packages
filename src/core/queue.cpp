@@ -350,6 +350,11 @@ void Queue::finish(unsigned long long id, bool installedCheckOk, int exitCode)
             t->detail = "cancelled during uninstall; the real state is uncertain";
         } else {
             t->state = TaskState::Failed;
+            t->detail = static_cast<unsigned int>(exitCode) == 0x8a15007du
+                ? "WinGet refused this user-scope operation from an elevated process; run it as the ordinary user"
+                : static_cast<unsigned int>(exitCode) == 0x87af0008u
+                    ? "WinGet could not write its user database (0x87AF0008); no package was removed. Close other WinGet operations and retry"
+                    : "the backend failed (exit " + std::to_string(exitCode) + "); review the command output before retrying";
         }
         return;
     }

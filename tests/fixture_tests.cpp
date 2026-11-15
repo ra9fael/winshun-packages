@@ -142,6 +142,18 @@ void wingetIdClassification()
 
 void wingetListFixture()
 {
+    {
+        const auto live = readFile("tests/fixtures/winget/list.en.v1.29.380.20261115.txt");
+        std::string why;
+        const auto parsed = WingetAdapter::fromListText(live, "2026-11-15", true, {}, &why);
+        CHECK(why.empty());
+        CHECK(parsed.winget == BackendState::Ready);
+        CHECK(parsed.packages.size() > 100);
+        for (const auto& p : parsed.packages) {
+            CHECK(!p.key.id.empty());
+            CHECK(!p.installedVersion.empty());
+        }
+    }
     section("winget list fixture (real v1.29.380 zh-CN)");
     const std::string text = readFile("tests/fixtures/winget/list.zh-CN.v1.29.380.txt");
     if (text.empty()) {
@@ -200,6 +212,78 @@ void wingetListFixture()
     CHECK(managedOnly.packages.size() < snapshot.packages.size());
     for (const auto& p : managedOnly.packages)
         CHECK(p.provenance == Provenance::BackendRecorded);
+}
+
+// The real output of
+//
+//   winget list --id iOfficeAI.OfficeCLI --exact --disable-interactivity
+//
+// on WinGet 1.29.380 (captured 2026-11-14):
+//
+//   Name      Id                  Version
+//   -------------------------------------
+//   OfficeCLI iOfficeAI.OfficeCLI 1.0.161
+//
+// The data row separates its columns with a SINGLE space, so the parser's
+// split-on-runs-of-spaces reading produced a single field and the row was
+// dropped as unreadable. The plugin then reported "the package was not found
+// after the run" for a package WinGet had just listed — and, worse, an
+// uninstall inverted that into "no longer listed", i.e. success.
+void wingetSingleSpaceColumnsFixture()
+{
+    section("winget list with single-space columns (real v1.29.380)");
+    const std::string text =
+        readFile("tests/fixtures/winget/list-single-space-columns.en.v1.29.380.txt");
+    if (text.empty()) {
+        std::printf("SKIP: fixture missing\n");
+        return;
+    }
+    std::string failure;
+    const auto snapshot = WingetAdapter::fromListText(text, "2026-11-14T11:39:00Z", true, {}, &failure);
+    CHECK(failure.empty());
+    CHECK(snapshot.winget == BackendState::Ready);
+    // The row must be READ, not dropped: a dropped row is what made the plugin
+    // claim the package was absent.
+    CHECK(snapshot.packages.size() == 1);
+    if (snapshot.packages.size() == 1) {
+        const auto& p = snapshot.packages.front();
+        CHECK(p.key.id == "iOfficeAI.OfficeCLI");
+        CHECK(p.installedVersion == "1.0.161");
+        CHECK(p.name == "OfficeCLI");
+        CHECK(p.canUninstall);
+    }
+
+    // The same text through the raw table parser: no unreadable rows, and the
+    // id column must not contain whitespace.
+    const auto table = winget::parseTable(text);
+    CHECK(table.failure.ok);
+    CHECK(table.unreadableRows == 0);
+    CHECK(table.rows.size() == 1);
+    if (table.rows.size() == 1) {
+        CHECK(table.value(0, "Id") == "iOfficeAI.OfficeCLI");
+        CHECK(table.value(0, "Version") == "1.0.161");
+        CHECK(table.value(0, "Name") == "OfficeCLI");
+    }
+}
+
+// WinGet's "nothing matched" answer is a COMPLETE list without the target —
+// the one case where absence is proved. It arrives with a negative exit code
+// and a message, not with an empty table.
+void wingetNoMatchAnswer()
+{
+    section("winget list answered 'no installed package found'");
+    // The real output of `winget list --id zz9.no.such.package.qq --exact`
+    // on WinGet 1.29.380 (captured 2026-11-14): exit code -1978335212
+    // (0x8A150014) and this one line — no table at all.
+    const std::string text = "No installed package found matching input criteria.\n";
+    std::string failure;
+    const auto snapshot = WingetAdapter::fromListText(text, "2026-11-14T11:40:00Z", true, {}, &failure);
+    // There is no table here, so the inventory read is unsupported — the
+    // verification path handles this case through the exit code and the
+    // message, not through the table parser.
+    CHECK(snapshot.winget == BackendState::Unsupported);
+    CHECK(snapshot.packages.empty());
+    CHECK(!failure.empty());
 }
 
 void wingetUpgradeFixture()
@@ -267,10 +351,13 @@ void wingetSearchFixture()
     bool foundJq = false;
     for (const auto& p : snapshot.packages) {
         CHECK(winget::isWingetPackageId(p.key.id));
-        // A search hit says nothing about being installed, and install stays
-        // disabled because the scope is unknown.
+        // Search can open the install review, but unknown scope cannot execute.
         CHECK(p.provenance == Provenance::None);
-        CHECK(!p.canInstall);
+        CHECK(p.canInstall);
+        CHECK(makePlan(p, Action::Install).state == PlanState::Blocked);
+        auto chosen = p;
+        chosen.key.scope = Scope::User;
+        CHECK(makePlan(chosen, Action::Install).state != PlanState::Blocked);
         if (p.key.id == "jqlang.jq")
             foundJq = true;
     }
@@ -396,6 +483,25 @@ void wingetCommandBuilding()
     CHECK(sawExact);
     CHECK(!sawUninstallScope);   // uninstall never passes a scope it cannot know
 
+    // `winget uninstall` REJECTS --accept-package-agreements ("Argument name was
+    // not recognized for the current command"), so an uninstall that carried the
+    // flag failed in the argument parser and the uninstaller never ran. The
+    // user's acknowledgement of an uninstall's impact is a plugin-side
+    // confirmation and must not become a command-line flag.
+    const auto uninstallWithAgreement = adapter.buildMutation(uninstall, {"installer", "source"});
+    CHECK(uninstallWithAgreement.ok);
+    int uninstallPackageFlags = 0, uninstallSourceFlags = 0;
+    for (const auto& a : uninstallWithAgreement.options.arguments) {
+        if (a == "--accept-package-agreements")
+            ++uninstallPackageFlags;
+        if (a == "--accept-source-agreements")
+            ++uninstallSourceFlags;
+    }
+    CHECK(uninstallPackageFlags == 0);
+    // The source agreement is a flag winget accepts for every verb, so it may
+    // still be passed — but the plugin only sends it when the user agreed.
+    CHECK(uninstallSourceFlags == 1);
+
     // The same identity with an evidenced newer version is an upgrade, also
     // without a scope.
     Package upgradable = installed;
@@ -416,6 +522,15 @@ void wingetCommandBuilding()
     }
     CHECK(sawUpgrade);
     CHECK(!sawUpgradeScope);
+
+    // An upgrade DOES accept the package agreement (uninstall does not).
+    const auto upgradeWithAgreement = adapter.buildMutation(upgrade, {"installer"});
+    CHECK(upgradeWithAgreement.ok);
+    int upgradePackageFlags = 0;
+    for (const auto& a : upgradeWithAgreement.options.arguments)
+        if (a == "--accept-package-agreements")
+            ++upgradePackageFlags;
+    CHECK(upgradePackageFlags == 1);
 }
 
 void scoopPinnedRefRules()
@@ -498,6 +613,33 @@ void wingetVerifyReachedTarget()
     CHECK(!WingetAdapter::versionReached("0.6.70-rc1", "0.6.70", detail));
 }
 
+// A seeded verdict must be used without starting the backend: that is the whole
+// point of persisting it (two WinGet processes per plugin launch saved).
+void seededProbeSkipsProcesses()
+{
+    section("seeded probe is used without running the backend");
+
+    WingetAdapter winget("C:\\definitely-not\\winget.exe");
+    ProbeResult seeded;
+    seeded.state = BackendState::Ready;
+    seeded.version = "v9.9.9";
+    seeded.capability.evidence = Evidence::L3;
+    winget.seedProbe(seeded);
+    CHECK(winget.isProbeSeeded());
+    const auto& fromCache = winget.probeCached();
+    // A real probe against a missing executable would report Missing, so Ready
+    // here proves no process ran.
+    CHECK(fromCache.state == BackendState::Ready);
+    CHECK(fromCache.version == "v9.9.9");
+
+    // A refusal is not seeded: the adapter must probe for real next time.
+    WingetAdapter denied("C:\\definitely-not\\winget.exe");
+    ProbeResult refusal;
+    refusal.state = BackendState::Denied;
+    denied.seedProbe(refusal);
+    CHECK(!denied.isProbeSeeded());
+}
+
 } // namespace
 
 int main()
@@ -506,10 +648,13 @@ int main()
     wingetTableGeometry();
     wingetIdClassification();
     wingetListFixture();
+    wingetSingleSpaceColumnsFixture();
+    wingetNoMatchAnswer();
     wingetUpgradeFixture();
     wingetSearchFixture();
     wingetPinFixture();
     wingetShowFixture();
+    seededProbeSkipsProcesses();
     wingetVerifyReachedTarget();
     wingetCommandBuilding();
     scoopPinnedRefRules();

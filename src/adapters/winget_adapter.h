@@ -56,14 +56,12 @@ public:
     Snapshot search(const ProbeResult& probe, const std::string& text, const bool* cancelRequested) override;
     Snapshot readUpdates(const ProbeResult& probe) override;
     CommandSpec buildMutation(const Plan& plan, const std::vector<std::string>& agreementsAccepted) override;
-    bool verifyInstalled(const ProbeResult& probe, const PackageKey& key, std::string& installedVersion,
-                         std::string& detail) override;
+    VerifyResult verifyInstalled(const ProbeResult& probe, const PackageKey& key) override;
     // Verification for an action that promised a specific version. Exit code 0 is
     // not success: an upgrade can run cleanly and leave the old version in place,
     // which is exactly what a DBX upgrade did. Comparing the reported installed
     // version against the plan's target is what separates the two.
-    bool verifyReachedTarget(const PackageKey& key, const std::string& targetVersion,
-                             std::string& installedVersion, std::string& detail);
+    VerifyResult verifyReachedTarget(const PackageKey& key, const std::string& targetVersion, VerifyResult base);
     // Same rule for a plain installed-check, exposed so it can be unit tested
     // without spawning a process.
     static bool versionReached(const std::string& installed, const std::string& target, std::string& detail);
@@ -105,10 +103,23 @@ public:
     // lookup) uses the same executable the probe validated instead of a bare
     // "winget.exe" that may not resolve under the host's environment.
     const std::string& executablePath() const { return m_executable; }
+    void seedProbe(const ProbeResult& probe) override;
+    std::string probeStampPath() const override { return m_executable; }
+    bool isProbeSeeded() const { return m_probed; }
+    // The pin list (pins_cache.h): one process per read, policy data that only
+    // an explicit pin/unpin changes, so it is seeded from disk and kept across
+    // refreshes instead of being re-read every scan.
+    void seedPins(std::vector<std::pair<std::string, std::string>> pins);
+    void invalidatePins();
+    bool pinsKnown() const;
+    std::vector<std::pair<std::string, std::string>> cachedPins() const;
+    // Forgets a seeded/previous verdict so the next probeCached() really runs
+    // the backend. Used by an explicit refresh and by "clear cache".
+    void invalidateProbe() { m_probed = false; m_probeCache = ProbeResult{}; }
     bool m_probed = false;
     ProbeResult m_probeCache;
 
-    std::mutex m_pinMutex;
+    mutable std::mutex m_pinMutex;   // guards the pin cache from the scan threads
     bool m_pinsFetched = false;
     std::vector<std::pair<std::string, std::string>> m_pinsCache;
 };

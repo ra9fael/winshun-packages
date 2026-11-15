@@ -5,8 +5,11 @@
 // QObject is ever touched from two threads.
 #include "window.h"
 
-#include <QClipboard>
 #include <QDesktopServices>
+#include <QDir>
+#include <QStringList>
+#include <QFile>
+#include <QFileInfo>
 #include <QGuiApplication>
 #include <QUrl>
 #include <QMetaObject>
@@ -20,6 +23,9 @@
 #include "../adapters/winget_adapter.h"
 #include "../adapters/winget_table.h"
 #include "../core/cache.h"
+#include "../core/search_cache.h"
+#include "../core/pins_cache.h"
+#include "../core/probe_cache.h"
 #include "../core/redact.h"
 #include "../platform/process.h"
 #include "models.h"
@@ -42,6 +48,15 @@ ScoopAdapter& scoopAdapter()
 }
 
 std::string toString(const QString& q) { return q.toStdString(); }
+
+// Case-insensitive exact-id matching for selection restore and the info cache.
+std::string lowerAscii(std::string s)
+{
+    std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+    return s;
+}
 
 // The last `maxBytes` of a process's output, trimmed at a line boundary. A task
 // log shows the tail because that is where the error is; the head is the banner.
@@ -78,6 +93,12 @@ Controller::Controller(QObject* parent) : QObject(parent)
     // and re-running winget list on every launch is what made it feel like
     // nothing was ever cached.
     loadCache();
+    loadInfoCache();
+    // After loadCache, so the window still paints even when there is no verdict.
+    // A seeded verdict must be installed before the first probeCached() call,
+    // which happens on the first refresh.
+    loadProbeCache();
+    loadPinsCache();
 }
 
 Controller::~Controller()
@@ -160,33 +181,434 @@ void Controller::applyAppearance(const QString& locale, bool dark, const QVarian
     emit appearanceChanged();
 }
 
-void Controller::applySettings(const UiSettings& settings) { m_settings = settings; }
+void Controller::applySettings(const UiSettings& settings)
+{
+    m_settings = settings;
+    // The settings popup binds to the summary; re-read it live when the user
+    // edits the plugin card (the host pushes settingsChanged mid-session).
+    emit settingsApplied();
+}
 
-void Controller::openWindow()
+void Controller::openWindow(OpenMode mode)
 {
     m_windowOpen = true;
     emit windowShouldShow();
-    // Opening the window probes only when there is no fresh cache: within
-    // refreshMinutes of the last successful scan the window opens instantly on
-    // the previous data, and the 刷新 button is what forces a re-query. Nothing
-    // runs before the user asked for the window at all.
-    const auto sinceScan = m_lastRefresh.isValid() ? m_lastRefresh.msecsTo(QDateTime::currentDateTime())
-                                                   : std::numeric_limits<qint64>::max();
-    const qint64 freshForMs = static_cast<qint64>(m_settings.refreshMinutes) * 60 * 1000;
-    // A backend that a previous scan found missing or refused is never treated as
-    // fresh: that answer depends on this process's environment (an elevated
-    // plugin gets a different one), so keeping it for up to refreshMinutes would
-    // show a failure the current process would not repeat.
-    const bool anyBackendUnavailable =
-        m_installed.winget != BackendState::Ready || m_installed.scoop != BackendState::Ready;
-    if (!m_lastRefresh.isValid() || sinceScan >= freshForMs || anyBackendUnavailable)
-        startBackendRefresh();
+    // Opening the window probes only when at least one backend's own answer is
+    // stale: each backend carries its own timestamp, so a fresh WinGet list is not
+    // re-read just because Scoop's part is old. Nothing runs before the user asked
+    // for the window at all.
+
+    // "Open without scanning" is a promise to the user: the window shows what
+    // was cached and no backend is queried because of opening. It does not stop
+    // a scan the user started earlier — that one is already running.
+    if (mode == OpenMode::NoScan)
+        return;
+    if (mode == OpenMode::ForceRefresh) {
+        // An explicit refresh is a request to look again, including at whether
+        // the backend still answers: drop a verdict seeded from disk.
+        wingetAdapter().invalidateProbe();
+        scoopAdapter().invalidateProbe();
+        startBackendRefresh(true);
+        return;
+    }
+
+    // The policy decides: "never" never scans, "always" always does, and
+    // "stale" scans only when the cache has expired.
+    const std::string policy = m_settings.scanOnOpen.empty() ? "stale" : m_settings.scanOnOpen;
+    if (policy == "never")
+        return;
+    const bool anyStale =
+        backendNeedsScan(m_wingetInstalled.wingetObservedAt, m_installed.winget) ||
+        backendNeedsScan(m_scoopInstalled.scoopObservedAt, m_installed.scoop);
+    if (policy == "always" || anyStale)
+        // "stale" refreshes only what is stale; "always" refreshes both.
+        startBackendRefresh(policy == "always");
+}
+
+void Controller::runStartupScan()
+{
+    // The user asked for a scan when WinShun starts. It must not open a window:
+    // a background refresh that pops the window up would be worse than no scan.
+    if (!m_settings.scanOnStartup || m_fakeMode)
+        return;
+    // Scanning under the wrong rights can produce a different answer than the
+    // user's normal session, so a plugin that is required to be elevated does
+    // not scan quietly with less rights — it waits for the elevated copy.
+    if (m_settings.requireAdminForScan && !platform::isElevated()) {
+        m_scanPolicyNote = text("需要管理员权限的扫描尚未运行：当前进程没有管理员权限。",
+                                "The scan that needs administrator rights did not run: this process does not "
+                                "have administrator rights.");
+        emit scanPolicyNoteChanged();
+        return;
+    }
+    startBackendRefresh();
 }
 
 QString Controller::cachePath() const
 {
     const std::string dir = platform::pluginDataDir();
     return dir.empty() ? QString() : QString::fromStdString(dir + "\\cache.json");
+}
+
+QString Controller::infoPath() const
+{
+    const std::string dir = platform::pluginDataDir();
+    return dir.empty() ? QString() : QString::fromStdString(dir + "\\info.json");
+}
+
+void Controller::loadInfoCache()
+{
+    // Same story as loadCache: the process may end between window opens, and a
+    // cached `winget show` answer saves a multi-second process per selection.
+    const QString path = infoPath();
+    if (path.isEmpty())
+        return;
+    std::string text;
+    if (!platform::readTextFile(toString(path), text))
+        return;
+    std::string error;
+    info_cache::Store store;
+    if (!info_cache::parse(text, store, error))
+        return;   // unreadable: ignore, the next fetch rebuilds it
+    m_infoStore = std::move(store);
+}
+
+void Controller::saveInfoCache()
+{
+    const QString path = infoPath();
+    if (path.isEmpty())
+        return;
+    platform::writeTextFile(toString(path), info_cache::serialize(m_infoStore));
+}
+
+bool Controller::infoFresh(const std::string& observedAt) const
+{
+    if (observedAt.empty() || m_settings.refreshMinutes <= 0)
+        return false;
+    const QDateTime fetched = QDateTime::fromString(QString::fromStdString(observedAt), Qt::ISODate);
+    if (!fetched.isValid())
+        return false;
+    return fetched.msecsTo(QDateTime::currentDateTime()) <
+           static_cast<qint64>(m_settings.refreshMinutes) * 60 * 1000;
+}
+
+QString Controller::searchCachePath(const QString& needle) const
+{
+    const std::string dir = platform::pluginDataDir();
+    if (dir.empty())
+        return {};
+    return QString::fromStdString(search_cache::pathFor(dir, toString(needle)));
+}
+
+bool Controller::applyCachedSearch(const QString& needle)
+{
+    const QString path = searchCachePath(needle);
+    if (path.isEmpty())
+        return false;
+    std::string text;
+    if (!platform::readTextFile(toString(path), text))
+        return false;
+    Snapshot cached;
+    std::string error;
+    if (!search_cache::parse(text, cached, error))
+        return false;
+    // Same freshness rule as every other cache: an unparsable or expired stamp
+    // means the answer must be asked again, never shown as if it were current.
+    if (!infoFresh(cached.observedAt))
+        return false;
+
+    m_search = cached;
+    m_search.scanScope = "search";
+    m_searchInFlight = false;
+    m_searchPending = false;
+    rebuildRows();
+    emit searchStateChanged();
+    emit statusChanged();
+    return true;
+}
+
+void Controller::saveSearchCache(const QString& needle, const Snapshot& snapshot)
+{
+    // The harness's deterministic rows must never become a cache entry the next
+    // real run would serve.
+    if (m_fakeMode)
+        return;
+    if (!search_cache::worthWriting(snapshot))
+        return;
+    const std::string dir = platform::pluginDataDir();
+    if (dir.empty())
+        return;
+    const std::string folder = dir + "\\search";
+    if (!platform::ensureDirectory(folder))
+        return;
+    platform::writeTextFile(search_cache::pathFor(dir, toString(needle)), search_cache::serialize(snapshot));
+    // Keep the directory bounded: an old query is worth less than a recent one.
+    platform::pruneOldFiles(folder, search_cache::kMaxEntries);
+}
+
+void Controller::clearSearchCache()
+{
+    const std::string dir = platform::pluginDataDir();
+    if (dir.empty())
+        return;
+    platform::pruneOldFiles(dir + "\\search", 0);
+}
+
+QString Controller::probePath() const
+{
+    const std::string dir = platform::pluginDataDir();
+    return dir.empty() ? QString() : QString::fromStdString(dir + "\\probe.json");
+}
+
+void Controller::loadProbeCache()
+{
+    // The harness injects its own snapshot; a remembered verdict would make its
+    // screenshots depend on this machine's last real probe.
+    if (m_fakeMode)
+        return;
+    const QString path = probePath();
+    if (path.isEmpty())
+        return;
+    std::string contents;
+    if (!platform::readTextFile(toString(path), contents))
+        return;
+    probe_cache::Store store;
+    std::string error;
+    if (!probe_cache::parse(contents, store, error))
+        return;
+
+    // The stamp is what makes reuse honest: same file, same size, same write
+    // time. A WinGet update changes them and the next launch probes for real.
+    const auto seed = [this](const probe_cache::Record& record, Adapter& adapter, ProbeResult& known) {
+        std::string current;
+        if (!platform::fileStamp(adapter.probeStampPath(), current))
+            return;
+        if (!probe_cache::reusable(record, current))
+            return;
+        ProbeResult probe;
+        probe.state = record.state;
+        probe.detail = record.detail;
+        probe.version = record.version;
+        probe.programPath = record.program;
+        adapter.seedProbe(probe);
+        // The window's own copy too: loadCache() derived it from the snapshot,
+        // but a seeded verdict is more specific (it carries the version).
+        known = probe;
+    };
+    if (store.hasWinget)
+        seed(store.winget, wingetAdapter(), m_wingetProbe);
+    if (store.hasScoop)
+        seed(store.scoop, scoopAdapter(), m_scoopProbe);
+
+    // Shown in the cache summary: "did this launch really skip the probe?" is
+    // otherwise invisible, and the answer is the whole point of the file.
+    QStringList reused;
+    if (wingetAdapter().isProbeSeeded())
+        reused << text("WinGet", "WinGet") + QStringLiteral(" ") + QString::fromStdString(store.winget.version);
+    if (scoopAdapter().isProbeSeeded())
+        reused << text("Scoop", "Scoop") + QStringLiteral(" ") + QString::fromStdString(store.scoop.version);
+    m_probeNote = reused.isEmpty()
+        ? text("探针：本次启动会重新检测", "Probe: re-checking on this launch")
+        : text("探针：复用上次结果（", "Probe: reused from disk (") + reused.join(QStringLiteral("、")) + QStringLiteral(")");
+}
+
+void Controller::saveProbeCache(){
+    if (m_fakeMode)
+        return;
+    const QString path = probePath();
+    if (path.isEmpty())
+        return;
+
+    probe_cache::Store store;
+    const auto fill = [](const ProbeResult& probe, const std::string& stampPath,
+                         probe_cache::Record& record, bool& has) {
+        // Only a verdict that can be built on is worth remembering; a refusal is
+        // often transient (a lock, a missing permission) and must be retried.
+        if (probe.state != BackendState::Ready && probe.state != BackendState::Unsupported)
+            return;
+        std::string stamp;
+        if (!platform::fileStamp(stampPath, stamp))
+            return;
+        record.state = probe.state;
+        record.detail = probe.detail;
+        record.version = probe.version;
+        record.program = stampPath;
+        record.stamp = stamp;
+        record.observedAt = QDateTime::currentDateTimeUtc().toString(Qt::ISODate).toStdString();
+        has = true;
+    };
+    fill(m_wingetProbe, wingetAdapter().probeStampPath(), store.winget, store.hasWinget);
+    fill(m_scoopProbe, scoopAdapter().probeStampPath(), store.scoop, store.hasScoop);
+    // A scan where both backends failed must not erase a good verdict.
+    if (!store.hasWinget && !store.hasScoop)
+        return;
+    platform::writeTextFile(toString(path), probe_cache::serialize(store));
+}
+
+QString Controller::pinsPath() const
+{
+    const std::string dir = platform::pluginDataDir();
+    return dir.empty() ? QString() : QString::fromStdString(dir + "\\pins.json");
+}
+
+void Controller::loadPinsCache()
+{
+    if (m_fakeMode)
+        return;
+    const QString path = pinsPath();
+    if (path.isEmpty())
+        return;
+    std::string contents;
+    if (!platform::readTextFile(toString(path), contents))
+        return;
+    pins_cache::Store store;
+    std::string error;
+    if (!pins_cache::parse(contents, store, error))
+        return;
+    // Same freshness rule as the other caches: an old list is worth one process
+    // to re-read, because a pin the user removed must stop blocking upgrades.
+    if (!infoFresh(store.observedAt))
+        return;
+    wingetAdapter().seedPins(std::move(store.entries));
+}
+
+void Controller::savePinsCache()
+{
+    if (m_fakeMode || !wingetAdapter().pinsKnown())
+        return;
+    const QString path = pinsPath();
+    if (path.isEmpty())
+        return;
+    pins_cache::Store store;
+    store.observedAt = QDateTime::currentDateTimeUtc().toString(Qt::ISODate).toStdString();
+    store.entries = wingetAdapter().cachedPins();
+    platform::writeTextFile(toString(path), pins_cache::serialize(store));
+}
+
+void Controller::clearPinsCache()
+{
+    wingetAdapter().invalidatePins();
+    const QString path = pinsPath();
+    if (!path.isEmpty())
+        QFile::remove(path);
+}
+
+void Controller::showCachedInfo(const info_cache::Entry& entry, int row, const std::string& id)
+{
+    m_packageInfoRow = row;
+    m_packageInfoId = QString::fromStdString(id);
+    m_packageInfoBusy = false;
+    m_packageInfo.clear();
+    for (const auto& [key, value] : entry.fields)
+        m_packageInfo.insert(QString::fromStdString(key), QString::fromStdString(value));
+    emit packageInfoChanged();
+    emit statusChanged();
+}
+
+QString Controller::settingsSummary() const
+{
+    const QString language = m_settings.language == "zh-CN" ? text("简体中文", "Chinese (Simplified)")
+                          : m_settings.language == "en-US" ? text("English", "English")
+                                                           : text("跟随 Win顺", "Follow WinShun");
+    const QString on = text("开", "on");
+    const QString off = text("关", "off");
+    return text("界面语言：", "Language: ") + language + "\n" +
+           text("选中后自动获取包信息：", "Fetch info on selection: ") +
+               (m_settings.autoFetchInfo ? on : off) + "\n" +
+           text("显示仅被枚举的项：", "Show observed-only rows: ") +
+               (m_settings.showObserved ? on : off) + "\n" +
+            text("缓存刷新间隔：", "Cache refresh interval: ") +
+                QString::number(m_settings.refreshMinutes) + text(" 分钟", " min") + "\n" +
+            text("详细诊断：", "Detailed diagnostics: ") + (m_settings.debugLogging ? on : off) + "\n" +
+            text("打开时扫描：", "Scan on open: ") + QString::fromStdString(m_settings.scanOnOpen) + "\n" +
+            text("启动时后台扫描：", "Scan at startup: ") + (m_settings.scanOnStartup ? on : off) + "\n" +
+            text("扫描要求管理员：", "Require administrator for scan: ") +
+                (m_settings.requireAdminForScan ? on : off);
+}
+
+QString Controller::cacheSummary() const
+{
+    const std::string dir = platform::pluginDataDir();
+    if (dir.empty())
+        return text("数据文件夹不可用。", "The data folder is unavailable.");
+    QString line = QString::fromStdString(dir);
+    const auto sizeLine = [this](const QFileInfo& file) {
+        return file.exists() ? text(" · ", " · ") + QString::number(file.size()) + " B" : QString();
+    };
+    line += text("\n清单缓存", "\nInventory cache") + sizeLine(QFileInfo(cachePath()));
+    if (m_lastRefresh.isValid())
+        line += text(" · 扫描于 ", " · scanned ") + m_lastRefresh.toString("yyyy-MM-dd hh:mm");
+    line += text("\n详情缓存", "\nInfo cache") + sizeLine(QFileInfo(infoPath())) +
+            text(" · ", " · ") + QString::number(static_cast<qsizetype>(m_infoStore.entries.size())) +
+            text(" 条", " entries");
+    const QString searchFolder = QString::fromStdString(dir) + QStringLiteral("\\search");
+    const int searches = QDir(searchFolder).entryList({QStringLiteral("*.json")}, QDir::Files).size();
+    line += text("\n搜索缓存", "\nSearch cache") + text(" · ", " · ") + QString::number(searches) +
+            text(" 条", " queries");
+    if (!m_probeNote.isEmpty())
+        line += QStringLiteral("\n") + m_probeNote;
+    return line;
+}
+
+QString Controller::dataPath() const
+{
+    return QString::fromStdString(platform::pluginDataDir());
+}
+
+void Controller::copyDataPath()
+{
+    const QString path = dataPath();
+    if (path.isEmpty()) {
+        m_copyNotice = text("数据文件夹不可用。", "The data folder is unavailable.");
+    } else {
+        copyUsingHost(path, text("已复制数据文件夹路径。", "Copied the data-folder path."));
+        return;
+    }
+    emit copyNoticeChanged();
+}
+
+void Controller::openDataFolder()
+{
+    const QString path = dataPath();
+    if (path.isEmpty()) {
+        m_copyNotice = text("数据文件夹不可用。", "The data folder is unavailable.");
+        emit copyNoticeChanged();
+        return;
+    }
+    if (!QDesktopServices::openUrl(QUrl::fromLocalFile(path))) {
+        m_copyNotice = text("无法打开数据文件夹。", "Could not open the data folder.");
+        emit copyNoticeChanged();
+    }
+}
+
+void Controller::clearCache()
+{
+    const std::string dir = platform::pluginDataDir();
+    if (!dir.empty()) {
+        QFile::remove(QString::fromStdString(dir + "\\cache.json"));
+        QFile::remove(QString::fromStdString(dir + "\\info.json"));
+        QFile::remove(QString::fromStdString(dir + "\\probe.json"));
+        QFile::remove(QString::fromStdString(dir + "\\pins.json"));
+        clearSearchCache();
+    }
+    m_installed = Snapshot{};
+    m_updates = Snapshot{};
+    m_wingetInstalled = Snapshot{};
+    m_scoopInstalled = Snapshot{};
+    m_wingetUpdates = Snapshot{};
+    m_scoopUpdates = Snapshot{};
+    m_search = Snapshot{};
+    m_lastRefresh = QDateTime();
+    m_infoStore = info_cache::Store{};
+    // "Clear cache" also means "forget what we concluded about the backends":
+    // the next scan should ask them rather than reuse a verdict.
+    wingetAdapter().invalidateProbe();
+    scoopAdapter().invalidateProbe();
+    wingetAdapter().invalidatePins();
+    // Empty snapshots show the honest "not scanned yet" state pane; the refresh
+    // button (or the next window open) rebuilds everything.
+    rebuildRows();
+    emit statusChanged();
 }
 
 void Controller::loadCache()
@@ -210,11 +632,36 @@ void Controller::loadCache()
         return;
     }
     m_installed = cached;
+    // Split the stored rows back into per-backend parts: a partial refresh must
+    // keep the rows of the backend it did not query, and the cached timestamps
+    // say which of the two is actually old.
+    const auto partOf = [](const Snapshot& whole, Manager manager) {
+        Snapshot part;
+        part.winget = whole.winget;
+        part.wingetDetail = whole.wingetDetail;
+        part.scoop = whole.scoop;
+        part.scoopDetail = whole.scoopDetail;
+        part.observedAt = whole.observedAt;
+        part.wingetObservedAt = whole.wingetObservedAt;
+        part.scoopObservedAt = whole.scoopObservedAt;
+        part.scanScope = whole.scanScope;
+        for (const auto& p : whole.packages)
+            if (p.key.manager == manager)
+                part.packages.push_back(p);
+        return part;
+    };
+    m_wingetInstalled = partOf(cached, Manager::Winget);
+    m_scoopInstalled = partOf(cached, Manager::Scoop);
+    m_wingetInstalled.wingetObservedAt = cached.wingetObservedAt;
+    m_scoopInstalled.scoopObservedAt = cached.scoopObservedAt;
     // The update listing is restored too: it is the most expensive query in the
     // scan, and without it every restart showed an empty Updates tab that had to
     // be waited for again before it could be used.
-    if (!cachedUpdates.observedAt.empty())
+    if (!cachedUpdates.observedAt.empty()) {
         m_updates = cachedUpdates;
+        m_wingetUpdates = partOf(cachedUpdates, Manager::Winget);
+        m_scoopUpdates = partOf(cachedUpdates, Manager::Scoop);
+    }
     // The cache records each backend's state, so the probe is known without
     // running one. Without this a warm launch leaves both probes Unknown, and a
     // search — which refuses while the probe is Unknown — would be deferred
@@ -256,9 +703,21 @@ void Controller::shutdown()
     emit windowShouldClose();
 }
 
-void Controller::refreshAll() { startBackendRefresh(); }
+void Controller::refreshAll() { startBackendRefresh(true); }
 
-void Controller::startBackendRefresh()
+bool Controller::backendNeedsScan(const std::string& observedAt, BackendState state) const
+{
+    // A backend that did not end Ready is always retried: that answer depends on
+    // the environment of this process, and keeping it for refreshMinutes would
+    // show a failure the current process might not repeat.
+    if (state != BackendState::Ready)
+        return true;
+    if (observedAt.empty())
+        return true;
+    return !infoFresh(observedAt);
+}
+
+void Controller::startBackendRefresh(bool force)
 {
     // The harness's deterministic mode must not start a backend: the whole point is
     // that the window's content comes from an injected snapshot, and a real scan
@@ -272,53 +731,81 @@ void Controller::startBackendRefresh()
     // for the GUI thread to apply.
     if (m_refreshInFlight)
         return;
+
+    // Only the backends that are actually stale are queried. A failing Scoop must
+    // not force a full WinGet rescan (its upgrade listing is the most expensive
+    // query here), and vice versa.
+    const bool scanWinget = force ||
+        backendNeedsScan(m_wingetInstalled.wingetObservedAt, m_installed.winget);
+    const bool scanScoop = force ||
+        backendNeedsScan(m_scoopInstalled.scoopObservedAt, m_installed.scoop);
+    if (!scanWinget && !scanScoop)
+        return;
+
     m_refreshInFlight = true;
     m_busy = true;
+    m_scanStage.clear();
     emit statusChanged();
 
-    // A finished mutation may have changed pins and the scoop inventory, so the
-    // per-scan caches are dropped here rather than never: within a scan the
-    // parallel queries share one fetch, between scans nothing is reused.
+    // A finished mutation may have changed the scoop inventory; the per-scan
+    // caches are dropped here so the parallel queries within one scan share a
+    // fetch but nothing is reused across scans. Pins and probes survive: they
+    // describe policy and the binary, not this scan's rows.
     wingetAdapter().invalidateCaches();
     scoopAdapter().invalidateCaches();
 
     auto* self = this;
-    spawnWorker([self] {
+    // Stage announcements ride the same marshal-back path as the results: a
+    // QString written from the worker while the GUI reads it would be a race.
+    const auto stage = [self](const char* zh, const char* en) {
+        QMetaObject::invokeMethod(self, [self, zh, en] {
+            self->m_scanStage = self->text(zh, en);
+            emit self->statusChanged();
+        }, Qt::QueuedConnection);
+    };
+    spawnWorker([self, stage, scanWinget, scanScoop] {
         // The two backends are independent: winget's list takes seconds on its
         // own, and running scoop after it doubles the wait for no benefit. Each
         // runs on its own thread, and the results are joined before marshalling
-        // back to the GUI thread. The update listing is a third query (winget
-        // `list --upgrade-available`, scoop bucket-manifest comparison) and runs
-        // alongside them, so the Updates tab is populated from the same scan.
+        // back to the GUI thread. A backend that is not being refreshed leaves
+        // empty results behind, and applyRefreshResults keeps its previous part.
         Snapshot wingetInstalled, scoopInstalled, wingetUpdates, scoopUpdates;
         ProbeResult wingetProbe, scoopProbe;
         std::thread wingetThread([&] {
+            if (!scanWinget)
+                return;
+            stage("WinGet 已安装列表", "WinGet installed list");
             wingetProbe = wingetAdapter().probeCached();
             if (wingetProbe.state == BackendState::Ready) {
                 wingetInstalled = wingetAdapter().readInstalled(wingetProbe, self->m_settings.showObserved);
+                stage("WinGet 更新列表", "WinGet update list");
                 wingetUpdates = wingetAdapter().readUpdates(wingetProbe);
             }
         });
         std::thread scoopThread([&] {
+            if (!scanScoop)
+                return;
+            stage("Scoop 已安装列表", "Scoop installed list");
             scoopProbe = scoopAdapter().probeCached();
             if (scoopProbe.state == BackendState::Ready)
                 scoopInstalled = scoopAdapter().readInstalled(scoopProbe, self->m_settings.showObserved);
         });
         // The scoop update listing reads bucket manifests; it runs on this
         // thread so it does not wait behind the export call of the thread above.
-        Snapshot scoopUpdatesLocal;
         wingetThread.join();
         scoopThread.join();
-        if (scoopProbe.state == BackendState::Ready)
-            scoopUpdatesLocal = scoopAdapter().readUpdates(scoopProbe);
-        scoopUpdates = scoopUpdatesLocal;
+        if (scanScoop && scoopProbe.state == BackendState::Ready) {
+            stage("Scoop 更新列表", "Scoop update list");
+            scoopUpdates = scoopAdapter().readUpdates(scoopProbe);
+        }
 
         // The GUI thread owns the controller; marshal the results.
         QMetaObject::invokeMethod(
             self,
-            [self, wingetProbe, scoopProbe, wingetInstalled, scoopInstalled, wingetUpdates, scoopUpdates] {
+            [self, wingetProbe, scoopProbe, wingetInstalled, scoopInstalled, wingetUpdates, scoopUpdates,
+             scanWinget, scanScoop] {
                 self->applyRefreshResults(wingetProbe, scoopProbe, wingetInstalled, scoopInstalled,
-                                          wingetUpdates, scoopUpdates);
+                                          wingetUpdates, scoopUpdates, scanWinget, scanScoop);
             },
             Qt::QueuedConnection);
     });
@@ -326,32 +813,69 @@ void Controller::startBackendRefresh()
 
 void Controller::applyRefreshResults(const ProbeResult& wingetProbe, const ProbeResult& scoopProbe,
                                      const Snapshot& wingetInstalled, const Snapshot& scoopInstalled,
-                                     const Snapshot& wingetUpdates, const Snapshot& scoopUpdates)
+                                     const Snapshot& wingetUpdates, const Snapshot& scoopUpdates,
+                                     bool scannedWinget, bool scannedScoop)
 {
     m_refreshInFlight = false;
-    m_wingetProbe = wingetProbe;
-    m_scoopProbe = scoopProbe;
-    // Only a scan that actually saw a ready backend counts as fresh: a denied
-    // probe must not suppress the next openWindow from retrying.
-    if (wingetProbe.state == BackendState::Ready || scoopProbe.state == BackendState::Ready)
+    m_scanStage.clear();
+
+    const std::string now = QDateTime::currentDateTimeUtc().toString(Qt::ISODate).toStdString();
+    if (scannedWinget) {
+        m_wingetProbe = wingetProbe;
+        m_wingetInstalled = wingetInstalled;
+        m_wingetUpdates = wingetUpdates;
+        // Only a scan that actually saw a ready backend counts as fresh: a denied
+        // probe must not suppress the next attempt.
+        if (wingetInstalled.winget == BackendState::Ready)
+            m_wingetInstalled.wingetObservedAt = now;
+        m_wingetInstalled.winget = wingetProbe.state;
+        if (m_wingetInstalled.wingetDetail.empty())
+            m_wingetInstalled.wingetDetail = wingetProbe.detail;
+        m_wingetUpdates.wingetObservedAt = m_wingetInstalled.wingetObservedAt;
+        m_wingetUpdates.winget = wingetProbe.state;
+        if (m_wingetUpdates.wingetDetail.empty())
+            m_wingetUpdates.wingetDetail = wingetProbe.detail;
+    }
+    if (scannedScoop) {
+        m_scoopProbe = scoopProbe;
+        m_scoopInstalled = scoopInstalled;
+        m_scoopUpdates = scoopUpdates;
+        if (scoopInstalled.scoop == BackendState::Ready)
+            m_scoopInstalled.scoopObservedAt = now;
+        m_scoopInstalled.scoop = scoopProbe.state;
+        if (m_scoopInstalled.scoopDetail.empty())
+            m_scoopInstalled.scoopDetail = scoopProbe.detail;
+        m_scoopUpdates.scoopObservedAt = m_scoopInstalled.scoopObservedAt;
+        m_scoopUpdates.scoop = scoopProbe.state;
+        if (m_scoopUpdates.scoopDetail.empty())
+            m_scoopUpdates.scoopDetail = scoopProbe.detail;
+    }
+
+    if (m_wingetInstalled.winget == BackendState::Ready || m_scoopInstalled.scoop == BackendState::Ready)
         m_lastRefresh = QDateTime::currentDateTime();
 
+    publishInventory();
+}
+
+void Controller::publishInventory()
+{
     // The two inventories are concatenated, never merged: identical names in
     // different managers stay separate rows.
     Snapshot combined;
-    combined.winget = wingetProbe.state;
-    combined.wingetDetail =
-        wingetInstalled.wingetDetail.empty() ? wingetProbe.detail : wingetInstalled.wingetDetail;
-    combined.scoop = scoopProbe.state;
-    combined.scoopDetail =
-        scoopInstalled.scoopDetail.empty() ? scoopProbe.detail : scoopInstalled.scoopDetail;
-    combined.observedAt =
-        wingetInstalled.observedAt.empty() ? scoopInstalled.observedAt : wingetInstalled.observedAt;
+    combined.winget = m_wingetInstalled.winget;
+    combined.wingetDetail = m_wingetInstalled.wingetDetail;
+    combined.scoop = m_scoopInstalled.scoop;
+    combined.scoopDetail = m_scoopInstalled.scoopDetail;
+    combined.wingetObservedAt = m_wingetInstalled.wingetObservedAt;
+    combined.scoopObservedAt = m_scoopInstalled.scoopObservedAt;
+    combined.observedAt = m_wingetInstalled.wingetObservedAt.empty()
+                              ? m_scoopInstalled.scoopObservedAt
+                              : m_wingetInstalled.wingetObservedAt;
     combined.scanScope = "installed";
-    combined.packages.insert(combined.packages.end(), wingetInstalled.packages.begin(),
-                             wingetInstalled.packages.end());
-    combined.packages.insert(combined.packages.end(), scoopInstalled.packages.begin(),
-                             scoopInstalled.packages.end());
+    combined.packages.insert(combined.packages.end(), m_wingetInstalled.packages.begin(),
+                             m_wingetInstalled.packages.end());
+    combined.packages.insert(combined.packages.end(), m_scoopInstalled.packages.begin(),
+                             m_scoopInstalled.packages.end());
     m_installed = combined;
 
     // `winget list` and `scoop export` carry no target version, so an installed
@@ -360,14 +884,14 @@ void Controller::applyRefreshResults(const ProbeResult& wingetProbe, const Probe
     // Without this an installed row is removable but never upgradable, and the
     // checkbox on it stays disabled whenever the row has no other action.
     for (auto& installed : m_installed.packages) {
-        for (const auto& updated : wingetUpdates.packages) {
+        for (const auto& updated : m_wingetUpdates.packages) {
             if (installed.key == updated.key && !updated.availableVersion.empty()) {
                 installed.availableVersion = updated.availableVersion;
                 installed.availableKind = updated.availableKind;
                 installed.canUpgrade = updated.canUpgrade;
             }
         }
-        for (const auto& updated : scoopUpdates.packages) {
+        for (const auto& updated : m_scoopUpdates.packages) {
             if (installed.key == updated.key && !updated.availableVersion.empty()) {
                 installed.availableVersion = updated.availableVersion;
                 installed.availableKind = updated.availableKind;
@@ -380,21 +904,88 @@ void Controller::applyRefreshResults(const ProbeResult& wingetProbe, const Probe
     // the installed listing does not know (winget's upgrade list, scoop's bucket
     // manifests), so reusing m_installed would show nothing.
     Snapshot updates;
-    updates.winget = wingetProbe.state;
-    updates.wingetDetail = wingetUpdates.wingetDetail.empty() ? wingetProbe.detail : wingetUpdates.wingetDetail;
-    updates.scoop = scoopProbe.state;
-    updates.scoopDetail = scoopUpdates.scoopDetail.empty() ? scoopProbe.detail : scoopUpdates.scoopDetail;
-    updates.observedAt = wingetUpdates.observedAt.empty() ? scoopUpdates.observedAt : wingetUpdates.observedAt;
+    updates.winget = m_wingetUpdates.winget;
+    updates.wingetDetail = m_wingetUpdates.wingetDetail;
+    updates.scoop = m_scoopUpdates.scoop;
+    updates.scoopDetail = m_scoopUpdates.scoopDetail;
+    updates.wingetObservedAt = m_wingetUpdates.wingetObservedAt;
+    updates.scoopObservedAt = m_scoopUpdates.scoopObservedAt;
+    updates.observedAt = m_wingetUpdates.observedAt.empty() ? m_scoopUpdates.observedAt : m_wingetUpdates.observedAt;
     updates.scanScope = "updates";
-    updates.packages.insert(updates.packages.end(), wingetUpdates.packages.begin(), wingetUpdates.packages.end());
-    updates.packages.insert(updates.packages.end(), scoopUpdates.packages.begin(), scoopUpdates.packages.end());
+    updates.packages.insert(updates.packages.end(), m_wingetUpdates.packages.begin(), m_wingetUpdates.packages.end());
+    updates.packages.insert(updates.packages.end(), m_scoopUpdates.packages.begin(), m_scoopUpdates.packages.end());
     m_updates = updates;
+
+    // Entries for packages that are no longer installed describe a machine
+    // that no longer exists; drop them so the cache cannot outlive the
+    // inventory it was built from. (Entries for packages whose version moved
+    // are dropped by onTaskFinished, the moment the mutation ends.)
+    if (!m_infoStore.entries.empty()) {
+        std::vector<std::string> installedLower;
+        installedLower.reserve(m_installed.packages.size());
+        for (const auto& p : m_installed.packages)
+            installedLower.push_back(lowerAscii(p.key.id));
+        bool changed = false;
+        for (auto it = m_infoStore.entries.begin(); it != m_infoStore.entries.end();) {
+            const bool stillThere =
+                std::find(installedLower.begin(), installedLower.end(), lowerAscii(it->id)) !=
+                installedLower.end();
+            if (stillThere) {
+                ++it;
+                continue;
+            }
+            it = m_infoStore.entries.erase(it);
+            changed = true;
+        }
+        if (changed)
+            saveInfoCache();
+    }
+
+    // Capture the selection by exact id before the rows are replaced; the
+    // restore right after rebuildRows puts it back where it still exists.
+    m_checkedIdsBeforeRefresh.clear();
+    m_selectedIdBeforeRefresh.clear();
+    if (m_packages) {
+        const auto& rows = m_packages->rows();
+        const int selected = m_packages->selected();
+        if (selected >= 0 && selected < static_cast<int>(rows.size()))
+            m_selectedIdBeforeRefresh = lowerAscii(rows[static_cast<std::size_t>(selected)].key.id);
+        for (int i = 0; i < static_cast<int>(rows.size()); ++i) {
+            if (m_packages->isChecked(i))
+                m_checkedIdsBeforeRefresh.push_back(lowerAscii(rows[static_cast<std::size_t>(i)].key.id));
+        }
+    }
 
     m_busy = false;
     rebuildRows();
+    // A refresh replaces every row, but the user's selection should survive it:
+    // restore the selected row and the checked ones by exact id (case
+    // insensitively — the backends may recase an id between scans). Rows that
+    // vanished are simply not restored.
+    if (m_packages && (!m_checkedIdsBeforeRefresh.empty() || !m_selectedIdBeforeRefresh.empty())) {
+        const auto& rows = m_packages->rows();
+        for (int i = 0; i < static_cast<int>(rows.size()); ++i) {
+            const std::string id = lowerAscii(rows[static_cast<std::size_t>(i)].key.id);
+            const bool wanted =
+                std::find(m_checkedIdsBeforeRefresh.begin(), m_checkedIdsBeforeRefresh.end(), id) !=
+                m_checkedIdsBeforeRefresh.end();
+            if (wanted)
+                m_packages->toggleChecked(i);
+            if (id == m_selectedIdBeforeRefresh)
+                m_packages->setSelected(i);
+        }
+        emit selectionChanged();
+    }
+    m_checkedIdsBeforeRefresh.clear();
+    m_selectedIdBeforeRefresh.clear();
     // The scan is now the newest truth on this machine: persist it so the next
     // process launch can paint immediately instead of re-querying.
     saveCache();
+    // The verdict about the binaries is what the next launch would otherwise
+    // spend two processes re-learning.
+    saveProbeCache();
+    // The pin list, if this scan had to read it.
+    savePinsCache();
     emit statusChanged();
 
     // A search typed before the first scan finished was deferred because the
@@ -611,8 +1202,12 @@ QString Controller::statusLine() const
     if (m_tab == "discover" && (m_searchPending || m_searchInFlight))
         return text("正在搜索…（Scoop 与 WinGet 并行查询）",
                     "Searching… (Scoop and WinGet in parallel)");
-    if (m_busy)
-        return text("正在查询…", "Querying…");
+    if (m_busy) {
+        // A scan runs four queries; the stage says which one is running so
+        // tens of seconds of work never look stuck.
+        return m_scanStage.isEmpty() ? text("正在查询…", "Querying…")
+                                     : text("正在刷新 · ", "Refreshing · ") + m_scanStage + "…";
+    }
     // The tasks page reports the queue, not a query: "read-only query complete"
     // there describes the wrong thing.
     if (m_tab == "tasks") {
@@ -753,6 +1348,25 @@ int Controller::finishedTasks() const
 
 QString Controller::reviewGateText() const
 {
+    if (reviewBatchCount() > 1) {
+        // The batch gate speaks about the list: what the confirm will do, and
+        // what it will not.
+        int ready = 0, blocked = 0;
+        for (const auto& plan : m_reviewPlans)
+            plan.state == PlanState::Ready ? ++ready : ++blocked;
+        if (ready == 0)
+            return text("全部阻塞 → 确认按钮保持禁用", "Every row is blocked → confirm stays disabled");
+        if (!m_reviewConfirmEnabled)
+            return m_needsSourceAgreement && !m_sourceAgreed
+                       ? text("源协议未同意 → 确认按钮保持禁用",
+                              "Source agreement not accepted → confirm stays disabled")
+                       : text("影响未确认 → 确认按钮保持禁用",
+                              "Impact not acknowledged → confirm stays disabled");
+        return text("将逐行入队 %1 个任务（%2 行阻塞，不会执行）",
+                    "Will queue %1 tasks one by one (%2 blocked rows are not run)")
+            .arg(ready)
+            .arg(blocked);
+    }
     if (m_reviewPlan.state == PlanState::Blocked)
         return text("阻塞", "BLOCKED");
     if (m_reviewConfirmEnabled)
@@ -970,6 +1584,12 @@ void Controller::startSearchWorker()
         return;
     if (m_searchInFlight)
         return;
+    const QString needle = m_searchText;
+    // A fresh answer for this exact query is already on disk: use it instead of
+    // spending two processes. This runs before the probe check because a cached
+    // answer needs no backend at all.
+    if (applyCachedSearch(needle))
+        return;
     // A search needs a probe that has already run: both adapters refuse while the
     // backend state is still Unknown, so starting one before the first scan
     // finishes produces an empty result that nothing retries. Defer instead, and
@@ -980,7 +1600,6 @@ void Controller::startSearchWorker()
         return;
     }
     m_searchInFlight = true;
-    const QString needle = m_searchText;
     emit searchStateChanged();
 
     auto* self = this;
@@ -1031,6 +1650,8 @@ void Controller::applySearchResults(const QString& needle, const Snapshot& winge
     m_search.scoopDetail = scoopSearch.scoopDetail;
     m_search.packages.insert(m_search.packages.end(), wingetSearch.packages.begin(), wingetSearch.packages.end());
     m_search.packages.insert(m_search.packages.end(), scoopSearch.packages.begin(), scoopSearch.packages.end());
+    // Persist the answer so the same query next time is a file read.
+    saveSearchCache(needle, m_search);
     rebuildRows();
     emit statusChanged();
 }
@@ -1043,7 +1664,9 @@ void Controller::selectRow(int row)
     // Selecting a new package invalidates any old reply, even if its request is
     // still in flight. requestPackageInfo is keyed by exact id, so it can safely
     // replace the older lookup rather than leave this pane waiting for it.
-    if (row >= 0 && m_packageInfoRow != row)
+    // With autoFetchInfo off the fetch waits for an explicit button; the cache
+    // still serves whatever a previous fetch stored (see requestPackageInfo).
+    if (row >= 0 && m_packageInfoRow != row && m_settings.autoFetchInfo)
         requestPackageInfo(row);
 }
 
@@ -1063,13 +1686,28 @@ void Controller::clearSelection()
     emit selectionChanged();
 }
 
-void Controller::copyToClipboard(const QString& text)
+void Controller::copyToClipboard(const QString& value)
 {
-    if (text.isEmpty())
+    if (!value.isEmpty())
+        copyUsingHost(value, text("已复制。", "Copied."));
+}
+
+void Controller::copyUsingHost(const QString& value, const QString& successMessage)
+{
+    if (!m_clipboardWriter) {
+        m_copyNotice = text("宿主剪贴板服务不可用。", "The host clipboard service is unavailable.");
+        emit copyNoticeChanged();
         return;
-    if (QClipboard* clipboard = QGuiApplication::clipboard())
-        clipboard->setText(text);
-    emit statusChanged();
+    }
+    m_copyNotice = text("正在复制…", "Copying…");
+    emit copyNoticeChanged();
+    m_clipboardWriter(value, [this, successMessage](bool ok, const QString& error) {
+        QMetaObject::invokeMethod(this, [this, ok, successMessage, error] {
+            m_copyNotice = ok ? successMessage : text("复制失败：", "Copy failed: ") + error;
+            emit copyNoticeChanged();
+            emit statusChanged();
+        }, Qt::QueuedConnection);
+    });
 }
 
 int Controller::selectedRow() const
@@ -1120,14 +1758,7 @@ void Controller::copyPackageInfo()
     append(QStringLiteral("description"), m_packageInfo.value(QStringLiteral("description")).toString());
     append(QStringLiteral("tags"), m_packageInfo.value(QStringLiteral("tags")).toString());
     append(QStringLiteral("releaseNotes"), m_packageInfo.value(QStringLiteral("releaseNotes")).toString());
-    if (QClipboard* clipboard = QGuiApplication::clipboard()) {
-        clipboard->setText(out);
-        m_copyNotice = text("已复制该包的元数据。", "Copied the package metadata.");
-    } else {
-        m_copyNotice = text("无法访问剪贴板。", "The clipboard is not available.");
-    }
-    emit copyNoticeChanged();
-    emit statusChanged();
+    copyUsingHost(out, text("已复制该包的元数据。", "Copied the package metadata."));
 }
 
 void Controller::copyTaskLog(qulonglong id)
@@ -1152,19 +1783,16 @@ void Controller::copyTaskLog(qulonglong id)
              + QString::fromStdString(e.phase) + QStringLiteral("\t")
              + QString::fromStdString(e.kind) + QStringLiteral("\t")
              + QString::fromStdString(e.text);
-        if (e.exitCode >= 0)
-            out += QStringLiteral("\t[exit %1]").arg(e.exitCode);
+        if (e.exitCode != -1) {
+            const quint32 raw = static_cast<quint32>(e.exitCode);
+            out += QStringLiteral("\t[exit %1 / 0x%2]")
+                       .arg(e.exitCode)
+                       .arg(raw, 8, 16, QLatin1Char('0'));
+        }
         out += QStringLiteral("\n");
     }
-    if (QClipboard* clipboard = QGuiApplication::clipboard()) {
-        clipboard->setText(out);
-        m_copyNotice = text("已复制该任务的日志（", "Copied this task's log (") +
-                       QString::number(t->log.size()) + text(" 行）。", " lines).");
-    } else {
-        m_copyNotice = text("无法访问剪贴板。", "The clipboard is not available.");
-    }
-    emit copyNoticeChanged();
-    emit statusChanged();
+    copyUsingHost(out, text("已复制该任务的日志（", "Copied this task's log (") +
+                           QString::number(t->log.size()) + text(" 行）。", " lines)."));
 }
 
 void Controller::openHomepage(int row)
@@ -1223,6 +1851,17 @@ void Controller::requestPackageInfo(int row)
         return;
     }
 
+    // A cached answer fills the pane without a multi-second process. It is good
+    // for as long as it describes this package: an entry fetched for the version
+    // still installed does not expire by age, only by the package changing. Rows
+    // that are not installed (search results) keep the time-based TTL.
+    info_cache::Entry cached;
+    if (info_cache::find(m_infoStore, p.key.id, cached) &&
+        (info_cache::stillMatches(cached, p.installedVersion) || infoFresh(cached.observedAt))) {
+        showCachedInfo(cached, row, p.key.id);
+        return;
+    }
+
     m_packageInfoRow = row;
     m_packageInfoId = QString::fromStdString(p.key.id);
     m_packageInfoBusy = true;
@@ -1241,7 +1880,7 @@ void Controller::requestPackageInfo(int row)
     // The answer is keyed by the exact id, not the row index: a tab switch reuses
     // row numbers for different packages, and a reply arriving after that would
     // otherwise describe the package that used to be at that index.
-    spawnWorker([self, id, row, executable] {
+    spawnWorker([self, id, row, executable, version = p.installedVersion] {
         std::map<std::string, std::string> fields;
         std::string error;
         {
@@ -1262,7 +1901,18 @@ void Controller::requestPackageInfo(int row)
         }
         QMetaObject::invokeMethod(
             self,
-            [self, row, id, fields, error] {
+            [self, row, id, fields, error, version] {
+                // Cache before the staleness check: the answer is valid for
+                // this id even when the pane has already moved to another row.
+                if (error.empty() && !fields.empty()) {
+                    info_cache::Entry entry;
+                    entry.id = id;
+                    entry.observedAt = QDateTime::currentDateTimeUtc().toString(Qt::ISODate).toStdString();
+                    entry.version = version;
+                    entry.fields = fields;
+                    info_cache::upsert(self->m_infoStore, std::move(entry));
+                    self->saveInfoCache();
+                }
                 if (self->m_packageInfoId != QString::fromStdString(id))
                     return;   // the selection moved on; this answer is stale
                 self->m_packageInfoRow = row;
@@ -1317,6 +1967,9 @@ void Controller::resetReview()
     m_needsSourceAgreement = false;
     m_reviewFacts.clear();
     m_reviewActions = QVariantList();
+    m_reviewRows.clear();
+    m_reviewPlans.clear();
+    m_reviewBatch.clear();
     m_blockedReason.clear();
     emit reviewChanged();
 }
@@ -1348,52 +2001,61 @@ void Controller::openReview()
     if (!m_packages)
         return;
     const auto& rows = m_packages->rows();
-    // The review page shows exactly one exact identity. Selecting several is a
-    // batch that must be enumerated item by item, which this page does not do.
-    const int checkedRow = m_packages->singleCheckedRow();
-    if (checkedRow < 0 || checkedRow >= static_cast<int>(rows.size())) {
+    // The review is a batch: every checked row is one enumerated, independently
+    // authorised change. One row is the common case and renders exactly as
+    // before; several rows list each package's own plan, and a row that cannot
+    // take the chosen action stays visible with its blocker instead of being
+    // dropped silently — the confirm then enqueues only the runnable ones.
+    std::vector<Package> batch;
+    for (int i = 0; i < static_cast<int>(rows.size()); ++i) {
+        if (m_packages->isChecked(i))
+            batch.push_back(rows[static_cast<std::size_t>(i)]);
+    }
+    if (batch.empty()) {
         m_reviewVisible = true;
         m_reviewConfirmEnabled = false;
         m_reviewAction = QString();
         m_reviewActions = QVariantList();
         m_reviewFacts.clear();
-        m_blockedReason = text("请只勾选一个包：每一项变更是独立授权的，一个按钮不能隐含批量操作。",
-                               "Select exactly one package: each change is authorised separately, and one button "
-                               "never implies a batch.");
+        m_blockedReason = text("请先勾选要操作的包：每一项变更是独立授权的。",
+                               "Check the packages to operate on first: each change is authorised separately.");
         emit reviewChanged();
         return;
     }
 
-    m_reviewPackage = rows[static_cast<std::size_t>(checkedRow)];
-    const auto& p = m_reviewPackage;
-    // A review for a row that was just rebuilt out of the model is only valid for
-    // this snapshot: rows are replaced on every refresh and on every tab switch.
-    // Keeping the copy (not a reference into the model) is what makes the page
+    // The checked rows are copied, not referenced: rows are replaced on every
+    // refresh and every tab switch, and keeping copies is what makes the page
     // safe to leave open across a background refresh.
-    m_reviewRow = checkedRow;
+    m_reviewBatch = std::move(batch);
+    m_reviewPackage = m_reviewBatch.front();
+    m_reviewRow = -1;
 
-    // Legal actions, in the order they are offered. Installed with an update
-    // available offers both upgrade and uninstall: they are independent intents
-    // and the plugin must not decide for the user. A held/pinned row still
-    // offers them; the plan's policy check reports what blocks it.
+    // Legal actions for the batch: the union over the rows. A batch upgrade is
+    // the common case from the Updates tab, so it leads when any row offers
+    // it; for a single row the list is exactly what that row offered before.
     m_reviewActions = QVariantList();
-    const bool installed = !p.installedVersion.empty();
-    if (!installed) {
+    int upgradable = 0, installedCount = 0, absent = 0;
+    for (const auto& p : m_reviewBatch) {
+        if (p.installedVersion.empty())
+            ++absent;
+        else
+            ++installedCount;
+        if (!p.installedVersion.empty() && !p.availableVersion.empty() &&
+            p.availableVersion != p.installedVersion)
+            ++upgradable;
+    }
+    if (upgradable > 0) {
         m_reviewActions.append(QVariantMap{
-            {"id", QStringLiteral("install")},
-            {"label", text("安装", "Install")},
-            {"why", text("该行尚未安装，只能安装", "Nothing is installed for this row, so install is the only action")},
+            {"id", QStringLiteral("upgrade")},
+            {"label", text("升级", "Upgrade")},
+            {"why", m_reviewBatch.size() == 1
+                        ? text("检测到更新可用，可升级到 %1", "An update is available; upgrade to %1")
+                              .arg(QString::fromStdString(m_reviewBatch.front().availableVersion))
+                        : text("%1 行检测到更新，可一并升级", "%1 rows have updates and can be upgraded together")
+                              .arg(upgradable)},
         });
-    } else {
-        const bool hasUpdate = !p.availableVersion.empty() && p.availableVersion != p.installedVersion;
-        if (hasUpdate) {
-            m_reviewActions.append(QVariantMap{
-                {"id", QStringLiteral("upgrade")},
-                {"label", text("升级", "Upgrade")},
-                {"why", text("检测到更新可用，可升级到 %1", "An update is available; upgrade to %1")
-                            .arg(QString::fromStdString(p.availableVersion))},
-            });
-        }
+    }
+    if (installedCount > 0) {
         m_reviewActions.append(QVariantMap{
             {"id", QStringLiteral("uninstall")},
             {"label", text("卸载", "Uninstall")},
@@ -1401,9 +2063,17 @@ void Controller::openReview()
                          "Uninstall removes the local software, whether or not an update exists")},
         });
     }
+    if (absent > 0) {
+        m_reviewActions.append(QVariantMap{
+            {"id", QStringLiteral("install")},
+            {"label", text("安装", "Install")},
+            {"why", text("该行尚未安装，只能安装", "Nothing is installed for this row, so install is the only action")},
+        });
+    }
 
-    // Default to the first legal action: upgrade when there is an update,
-    // otherwise uninstall (installed) or install (absent). The user can change it.
+    // Default to the first legal action: upgrade when any row has an update,
+    // otherwise uninstall (installed rows) or install (absent ones). The user
+    // can change it.
     const QString first = m_reviewActions.isEmpty()
                               ? QStringLiteral("install")
                               : m_reviewActions.first().toMap().value("id").toString();
@@ -1414,70 +2084,123 @@ void Controller::openReview()
 
 void Controller::buildReview(Action action)
 {
-    const auto& p = m_reviewPackage;
-    m_reviewPlan = makePlan(p, action, m_elevated);
-
-    // Preflight: the install material is fetched by the backend itself (winget
-    // downloads from its source, scoop installs from the bucket), so the plugin
-    // has nothing to prefetch and nothing to verify locally — the review page
-    // says exactly that. Uninstall needs no material at all. Either way, no
-    // plan reaches Ready without this preflight call.
-    if (m_reviewPlan.state != PlanState::Blocked) {
-        const bool needsMaterial = action == Action::Install || action == Action::Upgrade ||
-                                   action == Action::Reinstall;
-        applyPreflight(
-            m_reviewPlan, true, needsMaterial ? "backend-fetched" : "not required",
-            needsMaterial
-                ? text("安装材料由 backend 自行下载：插件不做预取，也不做本地校验；来源与版本已在上方核对。",
-                       "The install material is downloaded by the backend itself: the plugin neither prefetches "
-                       "nor verifies it locally; source and version are checked above.")
-                      .toStdString()
-                : std::string());
+    // One plan per checked package, each with its own preflight, facts and
+    // blockers. m_reviewFacts stays the single-row view; the batch list is what
+    // a multi-row review shows.
+    m_reviewPlans.clear();
+    m_reviewRows.clear();
+    bool anyNeedsSource = false;
+    int ready = 0;
+    const bool needsMaterial = action == Action::Install || action == Action::Upgrade ||
+                               action == Action::Reinstall;
+    const std::string materialNote =
+        needsMaterial
+            ? text("安装材料由 backend 自行下载：插件不做预取，也不做本地校验；来源与版本已在上方核对。",
+                   "The install material is downloaded by the backend itself: the plugin neither prefetches "
+                   "nor verifies it locally; source and version are checked above.")
+                  .toStdString()
+            : std::string();
+    for (const auto& p : m_reviewBatch) {
+        Plan plan = makePlan(p, action, m_elevated);
+        if (plan.state != PlanState::Blocked)
+            applyPreflight(plan, true, needsMaterial ? "backend-fetched" : "not required", materialNote);
+        if (plan.state == PlanState::Ready)
+            ++ready;
+        if (std::find(p.agreements.begin(), p.agreements.end(), "source") != p.agreements.end())
+            anyNeedsSource = true;
+        m_reviewPlans.push_back(plan);
+        m_reviewRows.append(QVariantMap{
+            {"id", QString::fromStdString(p.key.id)},
+            {"manager", QString::fromStdString(managerId(p.key.manager))},
+            {"source", QString::fromStdString(p.key.sourceOrUnknown())},
+            {"installed", QString::fromStdString(p.installedVersion)},
+            {"target", action == Action::Uninstall
+                           ? text("（移除）", "(remove)")
+                           : QString::fromStdString(p.availableVersion)},
+            {"method", reviewMethodFor(p, action)},
+            {"policy", QString::fromStdString(p.holdPolicy.empty() ? std::string("—") : p.holdPolicy)},
+            {"blocked", plan.state == PlanState::Blocked},
+            {"reason", QString::fromStdString(plan.blockedReason)},
+        });
     }
 
-    // Uninstall has no source and no installer agreement to read: it only asks
-    // the user to acknowledge the impact.
-    if (action == Action::Uninstall)
-        m_needsSourceAgreement = false;
-    else
-        m_needsSourceAgreement =
-            std::find(p.agreements.begin(), p.agreements.end(), "source") != p.agreements.end();
+    // Uninstall has no source agreement to read; install/upgrade union the
+    // rows' needs — one checkbox covers the batch, and the executor still
+    // re-checks each task's own plan when it runs.
+    m_needsSourceAgreement = action != Action::Uninstall && anyNeedsSource;
     m_sourceAgreed = !m_needsSourceAgreement;
     m_installerAgreed = false;
 
     m_reviewAction = QString::fromUtf8(actionId(action)).toUpper();
-    m_blockedReason = QString::fromStdString(m_reviewPlan.blockedReason);
-    m_reviewFacts = QVariantMap{
-        {"manager", QString::fromStdString(managerId(p.key.manager))},
-        {"source", QString::fromStdString(p.key.sourceOrUnknown())},
-        {"id", QString::fromStdString(p.key.id)},
-        {"scope", QString::fromStdString(scopeId(p.key.scope))},
-        {"arch", QString::fromStdString(p.arch)},
-        {"installed", QString::fromStdString(p.installedVersion)},
-        {"target", action == Action::Uninstall
-                       ? text("（移除本机版本）", "(removes the local version)")
-                       : QString::fromStdString(p.availableVersion)},
-        {"method", reviewMethod()},
-        {"material", action == Action::Uninstall
-                         ? text("无需下载材料（卸载只读本机状态）",
-                                "No material is downloaded; uninstall only reads local state")
-                         : QString::fromStdString(p.material)},
-        {"dependencies", QString::fromStdString(p.dependencies)},
-        {"policy", QString::fromStdString(p.holdPolicy.empty() ? std::string("—") : p.holdPolicy)},
-        {"verify", action == Action::Uninstall
-                       ? text("执行后重新读取已装列表；仍在列表中即视为卸载失败",
-                              "The installed list is re-read afterwards; still being listed means the uninstall "
-                              "failed")
-                       : text("执行后重新读取已装版本；退出码 0 不等于成功",
-                              "The installed version is re-read after the run; exit code 0 is not success")},
-        {"metadataAt", QString::fromStdString(p.metadataAt)},
-        {"risk", reviewRisk()},
-        {"interactive", action == Action::Upgrade || action == Action::Install
-                            ? text("安装器可能弹出自己的卸载/安装窗口；插件会等它结束，不会替你点击。",
-                                   "The installer may show its own uninstall/install window; the plugin waits for it and will not click for you.")
-                            : QString()},
-    };
+    m_reviewPackage = m_reviewBatch.front();
+    if (m_reviewBatch.size() == 1) {
+        m_reviewPlan = m_reviewPlans.front();
+        m_blockedReason = action == Action::Install &&
+                                  m_reviewPackage.key.manager == Manager::Winget &&
+                                  m_reviewPackage.key.scope == Scope::Unknown
+                              ? text("请先选择安装作用域：当前用户或所有用户；WinGet 搜索结果不提供作用域。",
+                                     "Choose Current user or All users first; WinGet search does not report install scope.")
+                              : QString::fromStdString(m_reviewPlan.blockedReason);
+        const auto& p = m_reviewPackage;
+        m_reviewFacts = QVariantMap{
+            {"manager", QString::fromStdString(managerId(p.key.manager))},
+            {"source", QString::fromStdString(p.key.sourceOrUnknown())},
+            {"id", QString::fromStdString(p.key.id)},
+            {"scope", QString::fromStdString(scopeId(p.key.scope))},
+            {"arch", QString::fromStdString(p.arch)},
+            {"installed", QString::fromStdString(p.installedVersion)},
+            {"target", action == Action::Uninstall
+                           ? text("（移除本机版本）", "(removes the local version)")
+                           : QString::fromStdString(p.availableVersion)},
+            {"method", reviewMethod()},
+            {"material", action == Action::Uninstall
+                             ? text("无需下载材料（卸载只读本机状态）",
+                                    "No material is downloaded; uninstall only reads local state")
+                             : QString::fromStdString(p.material)},
+            {"dependencies", QString::fromStdString(p.dependencies)},
+            {"policy", QString::fromStdString(p.holdPolicy.empty() ? std::string("—") : p.holdPolicy)},
+            {"verify", action == Action::Uninstall
+                           ? text("执行后重新读取已装列表；不再在列表中即为卸载成功",
+                                  "The installed list is re-read afterwards; the package being gone means the "
+                                  "uninstall succeeded")
+                           : text("执行后重新读取已装版本；退出码 0 不等于成功",
+                                  "The installed version is re-read after the run; exit code 0 is not success")},
+            {"metadataAt", QString::fromStdString(p.metadataAt)},
+            {"risk", reviewRisk()},
+            {"interactive", action == Action::Upgrade || action == Action::Install
+                                ? text("安装器可能弹出自己的卸载/安装窗口；插件会等它结束，不会替你点击。",
+                                       "The installer may show its own uninstall/install window; the plugin waits for it and will not click for you.")
+                                : QString()},
+        };
+    } else {
+        // A batch has no single plan: the rows carry the facts. The risk line is
+        // action-level and stays; the gate text reports what confirm will do.
+        m_reviewPlan = Plan{};
+        m_reviewFacts = QVariantMap{{"risk", reviewRisk()}};
+        m_blockedReason = ready == 0
+                              ? text("所选的行都不能执行该动作；各行原因见下方列表。",
+                                     "None of the selected rows can perform this action; each row's reason is "
+                                     "listed below.")
+                              : QString();
+    }
     m_reviewConfirmEnabled = false;
+}
+
+void Controller::setInstallScope(const QString& scope)
+{
+    if (m_reviewBatch.empty() || m_reviewAction != "INSTALL")
+        return;
+    if (scope != "user" && scope != "machine")
+        return;
+    for (auto& package : m_reviewBatch) {
+        if (package.key.manager == Manager::Winget && package.installedVersion.empty())
+        {
+            package.key.scope = scope == "user" ? Scope::User : Scope::Machine;
+            package.canInstall = true;
+        }
+    }
+    buildReview(Action::Install);
+    emit reviewChanged();
 }
 
 QString Controller::reviewActionLabel() const
@@ -1492,21 +2215,27 @@ QString Controller::reviewActionLabel() const
     return text("安装", "Install");
 }
 
-QString Controller::reviewMethod() const
+// The method line for one package under one action, shared by the single-row
+// facts and the batch list (a batch may mix managers, so the per-row text
+// cannot come from m_reviewPackage alone).
+QString Controller::reviewMethodFor(const Package& p, Action action) const
 {
-    const Manager m = m_reviewPackage.key.manager;
-    const bool scoop = m == Manager::Scoop;
-    const QString id = m_reviewAction.toLower();
-    if (id == QStringLiteral("uninstall"))
+    const bool scoop = p.key.manager == Manager::Scoop;
+    if (action == Action::Uninstall)
         return scoop ? QStringLiteral("scoop uninstall <name>")
                      : QStringLiteral("winget uninstall --id … --exact");
-    if (id == QStringLiteral("upgrade"))
+    if (action == Action::Upgrade)
         return scoop ? QStringLiteral("scoop update <name>（固定 shim 入口）")
                      : QStringLiteral("winget upgrade --id … --exact --source …");
-    if (m_reviewPlan.steps.size() > 1)
+    if (action == Action::Reinstall)
         return text("显式卸载，再安装（非原子）", "explicit uninstall, then install (NOT ATOMIC)");
     return scoop ? QStringLiteral("scoop install <name>")
                  : QStringLiteral("winget install --id … --exact --source …");
+}
+
+QString Controller::reviewMethod() const
+{
+    return reviewMethodFor(m_reviewPackage, actionFromId(m_reviewAction.toLower().toStdString()));
 }
 
 QString Controller::reviewRisk() const
@@ -1559,37 +2288,56 @@ void Controller::setSourceAgreed(bool agreed)
 void Controller::setInstallerAgreed(bool agreed)
 {
     m_installerAgreed = agreed;
-    // Confirmation needs the preflight to have passed AND every outstanding
-    // agreement to be explicitly checked. Nothing is pre-checked.
-    m_reviewConfirmEnabled = m_reviewPlan.state == PlanState::Ready && m_installerAgreed &&
+    // Confirmation needs every outstanding agreement explicitly checked AND at
+    // least one runnable plan: a batch of blocked rows confirms nothing.
+    int ready = 0;
+    for (const auto& plan : m_reviewPlans)
+        if (plan.state == PlanState::Ready)
+            ++ready;
+    m_reviewConfirmEnabled = ready > 0 && m_installerAgreed &&
                              (!m_needsSourceAgreement || m_sourceAgreed);
     emit reviewChanged();
 }
 
 void Controller::confirmAndQueue()
 {
-    if (!m_reviewConfirmEnabled || m_reviewPlan.state != PlanState::Ready)
+    if (!m_reviewConfirmEnabled)
         return;
-    // Consent is recorded per agreement, in the order the plan expects, and stored
-    // on the task itself. The executor hands exactly these to buildMutation, and
-    // nothing else ever adds an agreement flag.
+    // Consent is recorded per agreement, in the order the plans expect, and
+    // stored on each task itself. The executor hands exactly these to
+    // buildMutation, and nothing else ever adds an agreement flag.
     std::vector<std::string> accepted;
     if (m_sourceAgreed && m_needsSourceAgreement)
         accepted.push_back("source");
     if (m_installerAgreed)
         accepted.push_back("installer");
 
-    Plan plan = m_reviewPlan;
-    if (!confirmPlan(plan, "now")) {
-        m_blockedReason = text("确认失败：计划未通过预检或仍有未处理的协议。",
-                               "Confirmation failed: the plan did not pass preflight or an agreement is still "
-                               "outstanding.");
-        emit reviewChanged();
-        return;
+    // The batch confirm enqueues every runnable plan — one task each, still
+    // enumerated item by item, each re-checked by the executor's own preflight
+    // and verified independently after its run. Rows whose plan is blocked
+    // stay in the review with their reason; they are never silently covered.
+    unsigned long long queued = 0;
+    QStringList refusals;
+    for (Plan plan : m_reviewPlans) {
+        if (plan.state != PlanState::Ready)
+            continue;
+        if (!confirmPlan(plan, "now")) {
+            refusals << QString::fromStdString(plan.key.id) + ": " +
+                             text("确认失败：计划未通过预检或仍有未处理的协议。",
+                                  "confirmation failed: preflight did not pass or an agreement is outstanding");
+            continue;
+        }
+        const auto result = m_queue.enqueue(plan, accepted);
+        if (result.accepted) {
+            ++queued;
+        } else {
+            refusals << QString::fromStdString(plan.key.id) + ": " + QString::fromStdString(result.reason);
+        }
     }
-    const auto result = m_queue.enqueue(plan, accepted);
-    if (!result.accepted) {
-        m_blockedReason = QString::fromStdString(result.reason);
+    if (queued == 0) {
+        m_blockedReason = refusals.isEmpty()
+                              ? text("没有可入队的任务。", "No task was queueable.")
+                              : text("入队失败：", "Not queued: ") + refusals.join(text("；", "; "));
         emit reviewChanged();
         return;
     }
@@ -1601,8 +2349,8 @@ void Controller::confirmAndQueue()
     emit selectionChanged();
     emit tasksChanged();
     setTab(QStringLiteral("tasks"));
-    // Enqueueing is not running: the executor picks the task up and drives it
-    // through its phases on a worker thread.
+    // Enqueueing is not running: the executor picks the tasks up and drives
+    // them through their phases on a worker thread.
     drainQueue();
 }
 
@@ -1790,9 +2538,14 @@ void Controller::logLine(unsigned long long id, const char* phase, const char* k
         return;
     }
     const RedactRules rules = defaultRules(userProfilePath());
-    // redactBlock also strips ANSI escapes and caps the line length, so a single
-    // installer line cannot sprawl across the row.
-    m_queue.appendLog(id, phase, kind, trimBlock(redactBlock(text, rules, 1)), exitCode);
+    // Full evidence, not fragments: the task log is the only record of what the
+    // backend was told and what it answered, and the user reads it to judge a
+    // result. Redaction still applies (paths, ANSI escapes, secrets); the
+    // bounds are generous — 2000 lines, 4000 characters per line — instead of
+    // the old one-line fragment that hid everything but the first line.
+    RedactRules logRules = rules;
+    logRules.maxLineLength = 4000;
+    m_queue.appendLog(id, phase, kind, trimBlock(redactBlock(text, logRules, 2000)), exitCode);
 }
 
 void Controller::drainQueue()
@@ -1806,9 +2559,10 @@ void Controller::drainQueue()
     if (!next.found) {
         // Every lane is idle. A run may have changed what is installed, so the
         // inventory refreshes once, in the background; the exit code alone is
-        // never trusted to describe the machine.
+        // never trusted to describe the machine. Forced, because both parts may
+        // still look fresh while the package the task touched is stale.
         if (m_lastRefresh.isValid() && !m_queue.paused())
-            startBackendRefresh();
+            startBackendRefresh(true);
         return;
     }
     if (!m_queue.start(next.id)) {
@@ -1921,19 +2675,29 @@ void Controller::runOneTask(unsigned long long id)
                 }, Qt::QueuedConnection);
             }
             {
-                // The command line and its output are the only evidence of what
-                // happened, so they go in the log — redacted, because both can
-                // carry local paths.
+                // The command line and its full output are the only evidence of
+                // what happened, so they go to the log uncut — redacted as
+                // always (paths, ANSI, secrets), bounded by the redaction
+                // layer's generous caps instead of a hand-picked fragment.
                 std::string detail = std::string(self->chinese() ? "命令：" : "argv: ") + options.application;
                 for (const auto& a : options.arguments)
                     detail += " " + a;
-                const std::string outTail = tailOf(result.output, 600);
-                QMetaObject::invokeMethod(self, [self, id, step, detail, outTail, code = result.exitCode,
-                                                 timedOut = result.timedOut] {
+                QMetaObject::invokeMethod(self, [self, id, step, detail, output = result.output,
+                                                 code = result.exitCode, timedOut = result.timedOut] {
                     self->m_queue.setExitCode(id, code);
                     self->logLine(id, step.c_str(), "info", detail);
-                    if (!outTail.empty())
-                        self->logLine(id, step.c_str(), code == 0 ? "info" : "error", outTail, code);
+                    if (!output.empty())
+                        self->logLine(id, step.c_str(), code == 0 ? "info" : "error", output, code);
+                    if (static_cast<quint32>(code) == 0x8a15007du) {
+                        self->logLine(id, step.c_str(), "error",
+                            self->text("WinGet 拒绝在管理员进程中卸载当前用户安装的包。请在普通权限的 Win顺 中重新审阅卸载；插件不会自动降权或重试。",
+                                       "WinGet refused to uninstall a user-scope package from an elevated process. Review the uninstall again in a non-elevated WinShun; no automatic privilege change or retry was attempted.").toStdString(), code);
+                    }
+                    if (static_cast<quint32>(code) == 0x87af0008u) {
+                        self->logLine(id, step.c_str(), "error",
+                            self->text("WinGet 用户数据库当前不可写（0x87AF0008）。本次没有卸载软件；后台刷新与卸载并发访问已被修复，请关闭其他 WinGet 操作后重试。",
+                                       "WinGet's user database was not writable (0x87AF0008). Nothing was uninstalled; concurrent refresh and mutation access has been fixed. Close other WinGet operations and retry.").toStdString(), code);
+                    }
                     if (timedOut)
                         self->logLine(id, step.c_str(), "error",
                                                 self->text("进程超时，已终止。", "The process timed out and was "
@@ -1949,36 +2713,77 @@ void Controller::runOneTask(unsigned long long id)
 
         // A cancelled run does not reach the verify step: the state on disk is
         // whatever the installer left, and the next refresh reads that.
-        bool verifiedOk = false;
+        VerifyResult verify;
+        verify.outcome = VerifyOutcome::Unknown;
         if (ran && !cancel->load(std::memory_order_relaxed)) {
+            QMetaObject::invokeMethod(self, [self, id] {
+                self->m_queue.setPhase(id, "verify");
+                if (self->m_tasks)
+                    self->m_tasks->setTasks(self->m_queue.tasks());
+                emit self->tasksChanged();
+            }, Qt::QueuedConnection);
             const ProbeResult probe = manager == Manager::Scoop ? scoopAdapter().probeCached()
                                                                 : wingetAdapter().probeCached();
-            std::string versionText, detail;
             if (manager == Manager::Winget && plan.action == Action::Upgrade &&
                 !plan.facts.targetVersion.empty()) {
                 // Exit code 0 is not the verdict. A WinGet upgrade can report
                 // success and leave the old version in place (a DBX upgrade did
                 // exactly that), so the promised target version is checked.
-                verifiedOk = wingetAdapter().verifyReachedTarget(plan.key, plan.facts.targetVersion,
-                                                                 versionText, detail);
+                verify = wingetAdapter().verifyReachedTarget(plan.key, plan.facts.targetVersion,
+                                                            adapter.verifyInstalled(probe, plan.key));
             } else {
-                verifiedOk = adapter.verifyInstalled(probe, plan.key, versionText, detail);
+                verify = adapter.verifyInstalled(probe, plan.key);
+                if (plan.action == Action::Uninstall) {
+                    // The uninstall's verdict is the ABSENCE of the package, and
+                    // only a complete answer proves it. The old code inverted
+                    // "not found", which also matched a query that had failed —
+                    // so a failed query read as "no longer listed" and the task
+                    // looked uninstalled.
+                    if (verify.outcome == VerifyOutcome::Present) {
+                        verify.outcome = VerifyOutcome::PresentWrongVersion;
+                        verify.detail = "still listed after the uninstall" +
+                                        (verify.installedVersion.empty() ? std::string()
+                                                                          : " at " + verify.installedVersion);
+                    } else if (verify.outcome == VerifyOutcome::Absent) {
+                        verify.detail += ": the uninstall is confirmed";
+                    }
+                }
             }
-            QMetaObject::invokeMethod(self, [self, id, ok = verifiedOk, detail] {
+            const bool ok = verify.outcome == VerifyOutcome::Present ||
+                            verify.outcome == VerifyOutcome::Absent;
+            QMetaObject::invokeMethod(self, [self, id, ok, verify] {
                 self->m_queue.setVerified(id, ok);
-                if (!detail.empty())
-                    self->logLine(id, "verify", ok ? "ok" : "warning", detail);
+                if (!verify.detail.empty()) {
+                    const char* kind = ok ? "ok" : "warning";
+                    self->logLine(id, "verify", kind, verify.detail);
+                }
                 if (self->m_tasks)
                     self->m_tasks->setTasks(self->m_queue.tasks());
                 emit self->tasksChanged();
             }, Qt::QueuedConnection);
         }
 
-        QMetaObject::invokeMethod(self, [self, id, verifiedOk, exitCode, cancelled = cancel->load(std::memory_order_relaxed)] {
-            if (cancelled)
+        QMetaObject::invokeMethod(self, [self, id, verify, exitCode,
+                                         cancelled = cancel->load(std::memory_order_relaxed)] {
+            if (cancelled) {
                 self->m_queue.finish(id, false, exitCode);   // cancel is never success
-            else
-                self->m_queue.finish(id, verifiedOk, exitCode);
+            } else if (verify.outcome == VerifyOutcome::Unknown && exitCode == 0) {
+                // The run ended cleanly but the verification query could not
+                // answer (the backend's own list refused to see the package for
+                // a while, or timed out). "The machine state is unknown" is its
+                // own outcome — a failed verdict would be a guess, and the
+                // inventory rescan below shows the truth either way.
+                self->m_queue.setNeedsReview(
+                    id, self->text("运行已结束，但核对查询无法给出答案；机器的真实状态未知，"
+                                   "请对照下方刷新后的列表确认。",
+                                   "The run ended cleanly but the verification query could not answer; the real "
+                                   "machine state is unknown — check the refreshed list below.")
+                         .toStdString());
+            } else {
+                const bool ok = verify.outcome == VerifyOutcome::Present ||
+                                verify.outcome == VerifyOutcome::Absent;
+                self->m_queue.finish(id, ok, exitCode);
+            }
             const Task* t = self->m_queue.find(id);
             if (t) {
                 const char* kind = t->state == TaskState::Succeeded ? "ok"
@@ -1997,7 +2802,21 @@ void Controller::runOneTask(unsigned long long id)
 
 void Controller::onTaskFinished(unsigned long long id)
 {
-    (void)id;
+    // A mutation changed this package on disk: its cached `winget show` answer
+    // describes the old state (old version, old installer hash), so drop it and
+    // let the next selection refetch. The plan is gone when the task was
+    // refused before enqueueing — nothing to invalidate then.
+    if (const Task* t = m_queue.find(id); t && t->plan.action != Action::None) {
+        if (info_cache::drop(m_infoStore, t->plan.key.id))
+            saveInfoCache();
+        // A search answer older than this mutation would still offer the package
+        // that was just installed (or list one that was just removed), so the
+        // whole search cache goes rather than being trusted for its TTL.
+        clearSearchCache();
+        // The pin list is cheap to re-read and the mutation's own review may have
+        // depended on it.
+        clearPinsCache();
+    }
     // The finished task vacated its lane: whatever is next runs now, and when
     // nothing is, drainQueue refreshes the inventory once.
     m_runCancel.reset();

@@ -32,6 +32,28 @@ std::string nowText()
     return buffer;
 }
 
+// A short tail of real backend output for a failure detail, so the task log
+// shows what the backend actually said instead of a bare verdict. Redaction
+// happens later, when the UI layer writes the log line.
+std::string tailNote(const std::string& text)
+{
+    if (text.empty())
+        return " (no output)";
+    constexpr std::size_t kMax = 600;
+    std::size_t start = text.size() > kMax ? text.size() - kMax : 0;
+    if (start > 0) {
+        const std::size_t nl = text.find('\n', start);
+        if (nl != std::string::npos && nl + 1 < text.size())
+            start = nl + 1;
+    }
+    std::string tail = text.substr(start);
+    while (!tail.empty() && (tail.back() == '\n' || tail.back() == '\r' || tail.back() == ' '))
+        tail.pop_back();
+    if (tail.empty())
+        return " (no output)";
+    return " | output tail: \"" + tail + "\"";
+}
+
 // Runs winget. `withInteractivity` appends --disable-interactivity for the data
 // commands, so a source prompt can never block a query. Pure probes (--version,
 // --help) take no flags: some winget builds reject the global switch outside a
@@ -43,6 +65,13 @@ platform::RunOptions baseOptions(const std::string& executable, std::vector<std:
     options.application = executable;
     options.arguments = std::move(args);
     options.timeoutMs = timeoutMs;
+    // WinGet's portable-package database is resolved from USERPROFILE. The
+    // host may sanitize that variable to C:\\Users\\Default even though the
+    // plugin token belongs to the interactive user; that makes list resolve
+    // through one profile and uninstall open the other profile's DB. Pass the
+    // token-derived profile explicitly, and let process::run actually apply it.
+    if (const std::string profile = platform::currentUserProfile(); !profile.empty())
+        options.environment.emplace_back("USERPROFILE", profile);
     if (withInteractivity)
         options.arguments.push_back("--disable-interactivity");
     return options;
@@ -121,8 +150,15 @@ WingetAdapter::WingetAdapter(std::string executablePath) : m_executable(std::mov
     }
 }
 
-const ProbeResult& WingetAdapter::probeCached()
+void WingetAdapter::seedProbe(const ProbeResult& probe)
 {
+    // Only a verdict a query can build on is seeded; the caller already checked
+    // the executable stamp, so this is not a second validation.
+    m_probeCache = probe;
+    m_probed = probe.state == BackendState::Ready || probe.state == BackendState::Unsupported;
+}
+
+const ProbeResult& WingetAdapter::probeCached(){
     // The backend's location and version cannot change for the life of the
     // process: probing again would spawn two more winget processes and seconds
     // of waiting for the same answer. A Denied result is NOT cached — a
@@ -203,11 +239,37 @@ ProbeResult WingetAdapter::probe()
 
 void WingetAdapter::invalidateCaches()
 {
+    // Nothing per-scan is kept here anymore: the pin list is policy data that a
+    // query does not change, so it survives a refresh and is invalidated by an
+    // explicit action (invalidatePins) or by the persisted timestamp expiring.
+    // The probe result is kept for the same reason: re-learning it costs
+    // processes and cannot change while this process lives.
+}
+
+void WingetAdapter::seedPins(std::vector<std::pair<std::string, std::string>> pins)
+{
+    std::lock_guard<std::mutex> lock(m_pinMutex);
+    m_pinsCache = std::move(pins);
+    m_pinsFetched = true;
+}
+
+void WingetAdapter::invalidatePins()
+{
     std::lock_guard<std::mutex> lock(m_pinMutex);
     m_pinsFetched = false;
     m_pinsCache.clear();
-    // The probe result is kept: a missing winget will not appear mid-session, and
-    // re-probing costs two processes.
+}
+
+bool WingetAdapter::pinsKnown() const
+{
+    std::lock_guard<std::mutex> lock(m_pinMutex);
+    return m_pinsFetched;
+}
+
+std::vector<std::pair<std::string, std::string>> WingetAdapter::cachedPins() const
+{
+    std::lock_guard<std::mutex> lock(m_pinMutex);
+    return m_pinsCache;
 }
 
 std::vector<std::pair<std::string, std::string>> WingetAdapter::pinsCached()
@@ -371,10 +433,19 @@ CommandSpec WingetAdapter::buildMutation(const Plan& plan, const std::vector<std
     }
 
     // Agreements are opt-in, per agreement, and only when the user checked them.
+    //
+    // The flag a verb accepts is not the same for every verb: `winget uninstall`
+    // REJECTS --accept-package-agreements ("Argument name was not recognized for
+    // the current command"), so passing it made every uninstall fail in the
+    // argument parser — the uninstaller never even started. The user's
+    // acknowledgement of an uninstall's impact is a plugin-side confirmation,
+    // not an installer agreement, so it never becomes a command-line flag here.
+    const bool verbAcceptsInstallerAgreement = plan.action == Action::Install ||
+                                               plan.action == Action::Upgrade;
     for (const auto& agreement : agreementsAccepted) {
         if (agreement == "source")
             args.push_back("--accept-source-agreements");
-        else if (agreement == "installer")
+        else if (agreement == "installer" && verbAcceptsInstallerAgreement)
             args.push_back("--accept-package-agreements");
     }
 
@@ -395,61 +466,169 @@ CommandSpec WingetAdapter::buildMutation(const Plan& plan, const std::vector<std
     return spec;
 }
 
-bool WingetAdapter::verifyInstalled(const ProbeResult& probe, const PackageKey& key, std::string& installedVersion,
-                                    std::string& detail)
+// WinGet's own exit codes carry the answer, and the plugin was ignoring them.
+// `winget list --id <missing> --exact` answers
+//
+//   No installed package found matching input criteria.
+//
+// with a NEGATIVE exit code (-1978335212 = 0x8A150014), not with 0. Reading
+// that as "the list was complete and the package is not in it" is what made a
+// missing package look like a query failure — and, worse, made the uninstall
+// check invert a failed query into "success".
+//
+// The two facts the plugin needs are therefore separate:
+//   * the query SUCCEEDED and its output was a complete list, and
+//   * the target is IN that list.
+// Only the combination proves absence; anything else proves nothing.
+namespace {
+
+// WinGet's "no applicable source" HRESULT (0x8A150014), as a signed int.
+constexpr int kWingetNoSource = -1978335212;
+
+// WinGet's "no installed package matched" HRESULT (0x8A15002C).
+constexpr int kWingetNoMatch = -1978335230;
+
+bool isNotFoundExitCode(int code)
 {
-    installedVersion.clear();
-    if (probe.state != BackendState::Ready) {
-        detail = probe.detail;
-        return false;
-    }
-    const auto run = platform::run(baseOptions(m_executable, {"list", "--id", key.id, "--exact"}, 120000));
-    if (!run.launched) {
-        detail = "verification could not run: " + run.errorText;
-        return false;
-    }
-    std::string failure;
-    const auto snapshot = fromListText(run.output, nowText(), true, {}, &failure);
-    if (!failure.empty()) {
-        detail = "verification output was unsupported: " + failure;
-        return false;
-    }
-    // `winget list --id X --exact` is case-insensitive and can report the id with
-    // different casing than the plan stored, so compare case-insensitively. An
-    // exact string compare here reported "not found after the run" for a package
-    // the output had just listed.
-    const auto sameId = [](const std::string& a, const std::string& b) {
-        if (a.size() != b.size())
-            return false;
-        for (std::size_t i = 0; i < a.size(); ++i) {
-            if (std::tolower(static_cast<unsigned char>(a[i])) !=
-                std::tolower(static_cast<unsigned char>(b[i])))
-                return false;
-        }
-        return true;
-    };
-    for (const auto& p : snapshot.packages) {
-        if (!sameId(p.key.id, key.id))
-            continue;
-        installedVersion = p.installedVersion;
-        detail = "the package is installed at " + installedVersion;
-        return true;
-    }
-    detail = "the package was not found after the run";
-    return false;
+    return code == kWingetNoSource || code == kWingetNoMatch;
 }
 
-bool WingetAdapter::verifyReachedTarget(const PackageKey& key, const std::string& targetVersion,
-                                        std::string& installedVersion, std::string& detail)
+// The text WinGet prints when a filtered list matched nothing. It is proof of
+// "the list is complete and empty", not of "the query failed".
+bool saysNoMatch(const std::string& output)
 {
-    installedVersion.clear();
-    std::string version, why;
-    if (!verifyInstalled(probeCached(), key, version, why)) {
-        detail = why;
-        return false;
+    std::string text = output;
+    for (char& c : text)
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return text.find("no installed package found matching input criteria") != std::string::npos ||
+           text.find("no applicable package found matching input criteria") != std::string::npos ||
+           text.find("no packages found matching input criteria") != std::string::npos;
+}
+
+} // namespace
+
+VerifyResult WingetAdapter::verifyInstalled(const ProbeResult& probe, const PackageKey& key)
+{
+    VerifyResult result;
+    result.outcome = VerifyOutcome::Unknown;
+    if (probe.state != BackendState::Ready) {
+        result.detail = "the backend was not ready, so no query ran: " + probe.detail;
+        return result;
     }
-    installedVersion = version;
-    return versionReached(version, targetVersion, detail);
+
+    // A pass that finds nothing is retried with a growing wait: an upgrade's
+    // uninstall/reinstall cycle can leave the registration settling for tens of
+    // seconds after winget reports exit 0 (Zellij and DeepSeek Harness both hit
+    // this — the package was installed and only appeared in `winget list`
+    // minutes later).
+    constexpr int kChecks = 4;
+    const DWORD waits[kChecks - 1] = {2000, 5000, 12000};
+    const auto started = std::chrono::steady_clock::now();
+    std::string lastAnswer;
+    for (int attempt = 0;; ++attempt) {
+        const auto run = platform::run(baseOptions(m_executable, {"list", "--id", key.id, "--exact"}, 120000));
+        result.checks = attempt + 1;
+        result.exitCode = run.exitCode;
+        if (!run.launched) {
+            result.detail = "verification could not run: " + run.errorText;
+            return result;
+        }
+        if (run.timedOut) {
+            result.detail = "the verification query timed out after 120000 ms; nothing about the result state "
+                            "is known";
+            return result;
+        }
+
+        // WinGet's own "nothing matched" answer: a complete list that does not
+        // contain the target. This is the one case where absence is PROVED.
+        if (isNotFoundExitCode(run.exitCode) || saysNoMatch(run.output)) {
+            result.outcome = VerifyOutcome::Absent;
+            result.installedVersion.clear();
+            result.detail = "winget answered that no installed package matches " + key.id + " (exit " +
+                            std::to_string(run.exitCode) + "): the package is not installed" + tailNote(run.output);
+            result.elapsedSeconds =
+                std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+            return result;
+        }
+
+        std::string failure;
+        const auto snapshot = fromListText(run.output, nowText(), true, {}, &failure);
+        if (!failure.empty()) {
+            // The output could not be read as the expected table — an error
+            // message, a source agreement, a different winget shape. What winget
+            // actually said rides in the detail so the case is diagnosable from
+            // the task log alone.
+            result.detail = "verification output was unsupported: " + failure + tailNote(run.output);
+            return result;
+        }
+
+        // `winget list --id X --exact` is case-insensitive and can report the id
+        // with different casing than the plan stored, so compare
+        // case-insensitively. An exact string compare here reported "not found
+        // after the run" for a package the output had just listed.
+        const auto sameId = [](const std::string& a, const std::string& b) {
+            if (a.size() != b.size())
+                return false;
+            for (std::size_t i = 0; i < a.size(); ++i) {
+                if (std::tolower(static_cast<unsigned char>(a[i])) !=
+                    std::tolower(static_cast<unsigned char>(b[i])))
+                    return false;
+            }
+            return true;
+        };
+        for (const auto& p : snapshot.packages) {
+            if (!sameId(p.key.id, key.id))
+                continue;
+            result.outcome = VerifyOutcome::Present;
+            result.installedVersion = p.installedVersion;
+            result.detail = attempt == 0
+                               ? "the package is installed at " + result.installedVersion
+                               : "the package is installed at " + result.installedVersion +
+                                     " (found on verification check " + std::to_string(attempt + 1) + " of " +
+                                     std::to_string(kChecks) + ")";
+            result.elapsedSeconds =
+                std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+            return result;
+        }
+
+        // The query ran and produced a readable list that does not contain the
+        // target, but it did not say "nothing matched" either. That is not a
+        // complete answer: the list may be filtered, or the target may still be
+        // registering. Retry, and if that does not help, report the unknown
+        // state instead of claiming absence.
+        lastAnswer = "exit " + std::to_string(run.exitCode) + tailNote(run.output);
+        if (attempt >= kChecks - 1)
+            break;
+        ::Sleep(waits[attempt]);   // the registry/installer bookkeeping may still be settling
+    }
+
+    result.outcome = VerifyOutcome::Unknown;
+    result.detail = "the package was not found in a complete answer (checked " + std::to_string(kChecks) +
+                    " times over ~20 s); the last answer was: " + lastAnswer;
+    result.elapsedSeconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+    return result;
+}
+
+VerifyResult WingetAdapter::verifyReachedTarget(const PackageKey& key, const std::string& targetVersion,
+                                                 VerifyResult base)
+{
+    (void)key;
+    if (!base.provedPresent()) {
+        // Absent stays absent; unknown stays unknown. A failed verification must
+        // never be turned into "the wrong version".
+        if (base.outcome == VerifyOutcome::Absent)
+            base.detail += "; the target version " + targetVersion + " was therefore not reached";
+        return base;
+    }
+    std::string why;
+    if (versionReached(base.installedVersion, targetVersion, why)) {
+        base.outcome = VerifyOutcome::Present;
+        base.detail += "; the target version " + targetVersion + " was reached";
+        return base;
+    }
+    base.outcome = VerifyOutcome::PresentWrongVersion;
+    base.detail += "; " + why;
+    return base;
 }
 
 bool WingetAdapter::versionReached(const std::string& installed, const std::string& target,
@@ -656,8 +835,8 @@ Snapshot WingetAdapter::fromSearchText(const std::string& text, const std::strin
         p.metadataAt = observedAt;
         p.dependencies = "unknown";
         p.material = "not inspected";
-        p.canInstall = false;             // scope still unknown
-        p.limits = "scope is not reported by WinGet; install stays disabled until it is resolved";
+        p.canInstall = true; // Opens review; explicit scope is required before confirmation.
+        p.limits = "choose user or machine scope in the install review before confirming";
         snapshot.packages.push_back(std::move(p));
     }
     snapshot.winget = BackendState::Ready;

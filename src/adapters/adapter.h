@@ -39,6 +39,37 @@ struct CommandSpec {
     std::string redactedPreview;  // for the task log and the review page
 };
 
+// What a post-run verification actually established. The old pair of booleans
+// ("found" and "knowable") could be combined into a wrong claim: an uninstall
+// inverted "found == false" into "success", which also matched a query that
+// simply failed. These outcomes say what the evidence supports.
+enum class VerifyOutcome {
+    // The identity was read and is present, with its installed version.
+    Present,
+    // The identity was read and is provably gone: the backend answered a
+    // complete list that does not contain it.
+    Absent,
+    // The identity was read and is present, but not at the requested version.
+    PresentWrongVersion,
+    // The query could not answer: it failed, timed out, or the output could not
+    // be read. Nothing about the machine state follows from that.
+    Unknown,
+};
+
+// The evidence behind a verification, so the task log can say why.
+struct VerifyResult {
+    VerifyOutcome outcome = VerifyOutcome::Unknown;
+    std::string installedVersion;   // empty when absent or unknown
+    std::string detail;             // human-readable, already free of secrets
+    int exitCode = -1;              // the backend's exit code for the query
+    int checks = 0;                 // how many queries were made
+    double elapsedSeconds = 0.0;
+
+    bool provedPresent() const { return outcome == VerifyOutcome::Present; }
+    bool provedAbsent() const { return outcome == VerifyOutcome::Absent; }
+    bool unknown() const { return outcome == VerifyOutcome::Unknown; }
+};
+
 class Adapter {
 public:
     virtual ~Adapter() = default;
@@ -48,6 +79,14 @@ public:
     // Detection only. Must not accept agreements, refresh sources, update the
     // manager, or install anything.
     virtual ProbeResult probe() = 0;
+
+    // Reuses a verdict recorded by an earlier process (probe_cache.h). Only
+    // called with a record whose executable stamp still matches, so this must
+    // not re-validate; it installs the answer as if probe() had just returned it.
+    virtual void seedProbe(const ProbeResult&) {}
+    // The executable whose fingerprint decides whether a seeded verdict is still
+    // about this build. Empty when the adapter cannot say.
+    virtual std::string probeStampPath() const { return {}; }
 
     // Installed inventory. `includeObserved` lets the UI hide rows that only
     // appeared in an enumeration.
@@ -67,9 +106,9 @@ public:
     virtual CommandSpec buildMutation(const Plan& plan, const std::vector<std::string>& agreementsAccepted) = 0;
 
     // Re-reads one identity after a run so success is decided by state, not by
-    // an exit code.
-    virtual bool verifyInstalled(const ProbeResult& probe, const PackageKey& key, std::string& installedVersion,
-                                 std::string& detail) = 0;
+    // an exit code. The outcome says what the evidence supports: present,
+    // absent, present at the wrong version, or unknown.
+    virtual VerifyResult verifyInstalled(const ProbeResult& probe, const PackageKey& key) = 0;
 };
 
 } // namespace pkg

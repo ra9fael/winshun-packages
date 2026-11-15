@@ -36,6 +36,10 @@ set(CORE_SOURCES
     src/core/redact.cpp
     src/core/json_lite.cpp
     src/core/cache.cpp
+    src/core/info_cache.cpp
+    src/core/search_cache.cpp
+    src/core/probe_cache.cpp
+    src/core/pins_cache.cpp
     src/core/theme_tokens.cpp
 )
 
@@ -61,7 +65,7 @@ qt_add_executable(packages
 target_include_directories(packages PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(packages PRIVATE
     Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick Qt6::QuickControls2
-    advapi32 shell32 ole32
+    advapi32 shell32 ole32 userenv
 )
 
 # plugin.json names the exe as runtime.program, so it is emitted next to the
@@ -98,8 +102,14 @@ qt_add_qml_module(packages
 # the same cases can run on a Linux CI job.
 enable_testing()
 
+add_executable(packages_protocol_tests tests/protocol_tests.cpp)
+target_include_directories(packages_protocol_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+set_target_properties(packages_protocol_tests PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tests")
+add_test(NAME packages_protocol COMMAND packages_protocol_tests)
+
 add_executable(packages_core_tests tests/core_tests.cpp ${CORE_SOURCES})
 target_include_directories(packages_core_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(packages_core_tests PRIVATE userenv)
 add_test(NAME packages_core COMMAND packages_core_tests)
 
 add_executable(packages_theme_tests tests/theme_tokens_tests.cpp src/core/theme_tokens.cpp)
@@ -111,6 +121,7 @@ add_test(NAME packages_theme COMMAND packages_theme_tests)
 # child to run rather than a fixture.
 add_executable(packages_process_tests tests/process_tests.cpp src/platform/process.cpp)
 target_include_directories(packages_process_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(packages_process_tests PRIVATE userenv)
 add_test(NAME packages_process COMMAND packages_process_tests)
 
 add_executable(packages_fixture_tests
@@ -120,6 +131,7 @@ add_executable(packages_fixture_tests
     ${ADAPTER_SOURCES}
 )
 target_include_directories(packages_fixture_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(packages_fixture_tests PRIVATE userenv)
 add_test(NAME packages_fixtures COMMAND packages_fixture_tests)
 set_tests_properties(packages_fixtures PROPERTIES WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 
@@ -130,6 +142,7 @@ add_executable(packages_scoop_tests
     ${ADAPTER_SOURCES}
 )
 target_include_directories(packages_scoop_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(packages_scoop_tests PRIVATE userenv)
 add_test(NAME packages_scoop COMMAND packages_scoop_tests)
 set_tests_properties(packages_scoop PROPERTIES WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 
@@ -166,7 +179,7 @@ if(PACKAGES_BUILD_GRAB_TOOL)
     )
     target_include_directories(packages_grab_window PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_link_libraries(packages_grab_window PRIVATE
-        Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick Qt6::QuickControls2 advapi32 shell32 ole32)
+        Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick Qt6::QuickControls2 advapi32 shell32 ole32 userenv)
 endif()
 
 # Diagnostic: prints what locateScoop() resolves in this process's environment.
@@ -181,7 +194,19 @@ if(PACKAGES_BUILD_PROBE_TOOL)
         ${CORE_SOURCES}
     )
     target_include_directories(packages_probe_scoop PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-    target_link_libraries(packages_probe_scoop PRIVATE advapi32 shell32 ole32)
+    target_link_libraries(packages_probe_scoop PRIVATE advapi32 shell32 ole32 userenv)
+
+    # Same idea for WinGet: reproduces locateWinget() + the --version probe, so a
+    # host-provided environment that breaks the launch can be reproduced outside
+    # the plugin (e.g. USERPROFILE/LOCALAPPDATA pointing at another profile).
+    add_executable(packages_probe_winget
+        tools/probe_winget.cpp
+        src/platform/process.cpp
+        ${ADAPTER_SOURCES}
+        ${CORE_SOURCES}
+    )
+    target_include_directories(packages_probe_winget PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(packages_probe_winget PRIVATE advapi32 shell32 ole32 userenv)
 endif()
 
 # The development harness: the real window with no plugin host. Not shipped and not
@@ -203,7 +228,7 @@ if(PACKAGES_BUILD_DEV_TOOL)
     )
     target_include_directories(packages_dev PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_link_libraries(packages_dev PRIVATE
-        Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick Qt6::QuickControls2 advapi32 shell32 ole32)
+        Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick Qt6::QuickControls2 advapi32 shell32 ole32 userenv)
     set_target_properties(packages_dev PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     # The harness reads the scene from src/ui/qml (that is what makes --watch and
     # edit-without-rebuild work), so the path is compiled in as its default. It is

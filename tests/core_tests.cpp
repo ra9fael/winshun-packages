@@ -8,6 +8,10 @@
 
 #include "../src/core/identity.h"
 #include "../src/core/cache.h"
+#include "../src/core/info_cache.h"
+#include "../src/core/pins_cache.h"
+#include "../src/core/probe_cache.h"
+#include "../src/core/search_cache.h"
 #include "../src/core/model.h"
 #include "../src/core/plan.h"
 #include "../src/core/queue.h"
@@ -159,7 +163,29 @@ void versionRules()
     CHECK(compareVersionStrings("unknown", "1.0") == Order::Unknown);
     CHECK(compareVersionStrings("latest", "1.0") == Order::Unknown);
     CHECK(compareVersionStrings("", "1.0") == Order::Unknown);
-    CHECK(compareVersionStrings("2.0.0-alpha", "2.0.0-beta") == Order::Unknown); // cannot be ordered
+    // Different pre-release identifiers now follow SemVer §11: alphanumeric
+    // identifiers compare in ASCII order, so alpha < beta and this pair is a
+    // provable upgrade. Unorderable pairs need a malformed identifier.
+    CHECK(compareVersionStrings("2.0.0-alpha", "2.0.0-beta") == Order::Older);
+
+    // SemVer §11 pre-release identifiers: rc.2 < rc.3 (numeric identifiers
+    // compare numerically — a DeepSeek-style "0.2.2-rc.2 → 0.2.2-rc.3" row
+    // used to be blocked as unorderable), alpha < alpha.1 (a shorter set
+    // sorts below a longer one), and a numeric identifier sorts below an
+    // alphanumeric one at the same position.
+    CHECK(compareVersionStrings("0.2.2-rc.1", "0.2.2-rc.2") == Order::Older);
+    CHECK(compareVersionStrings("0.2.2-rc.2", "0.2.2-rc.3") == Order::Older);
+    CHECK(compareVersionStrings("0.2.2-rc.2", "0.2.2-rc.2") == Order::Same);
+    CHECK(compareVersionStrings("1.0.0-alpha", "1.0.0-alpha.1") == Order::Older);
+    CHECK(compareVersionStrings("1.0.0-alpha.1", "1.0.0-alpha.beta") == Order::Older);
+    CHECK(compareVersionStrings("1.0.0-alpha.beta", "1.0.0-beta") == Order::Older);
+    CHECK(compareVersionStrings("1.0.0-beta.2", "1.0.0-beta.11") == Order::Older);
+    CHECK(compareVersionStrings("1.0.0-rc.2", "1.0.0-rc.10") == Order::Older);
+    CHECK(compareVersionStrings("2.0.0+build.1", "2.0.0+build.2") == Order::Same);   // build metadata ignored
+    CHECK(compareVersionStrings("2.0.0+build.1", "2.0.0") == Order::Same);
+    CHECK(compareVersionStrings("0.2.2-rc.2", "0.3") == Order::Older);   // numeric part first
+    // A malformed identifier ("alpha..b") stays unorderable rather than guessed.
+    CHECK(compareVersionStrings("1.0.0-alpha..b", "1.0.0-alpha.2") == Order::Unknown);
 
     CHECK(isNewer("1.9.0", "1.10.0"));
     CHECK(!isNewer("1.10.0", "1.9.0"));
@@ -307,8 +333,9 @@ void policyRules()
     const Plan u = makePlan(unknownVersion, Action::Upgrade);
     CHECK(u.state == PlanState::Blocked);
 
-    // An unorderable target is not an upgrade.
-    Package weird = makePackage(Manager::Winget, "winget", "x.y", Scope::User, "2.0.0-alpha", "2.0.0-beta");
+    // An unorderable target is not an upgrade. "alpha..b" is a malformed
+    // SemVer identifier, so the pair stays Unknown and the plan blocks.
+    Package weird = makePackage(Manager::Winget, "winget", "x.y", Scope::User, "1.0.0-alpha..b", "1.0.0-alpha.2");
     CHECK(makePlan(weird, Action::Upgrade).state == PlanState::Blocked);
 
     // An unknown scope (winget list prints no scope column) blocks an install
@@ -325,13 +352,13 @@ void policyRules()
     const Plan uninstallUnknown = makePlan(wingetUnknown, Action::Uninstall);
     CHECK(uninstallUnknown.state == PlanState::Draft);
 
-    // Machine scope needs an elevated path. The manifest declares `elevated`, so
-    // it is blocked only while the process is not actually elevated — the same
-    // row becomes plannable once the host confirmed the plugin's elevation.
+    // WinGet owns installer UAC; planning must not require an elevated UI.
     Package machine = makePackage(Manager::Winget, "winget", "Microsoft.PowerToys", Scope::Machine, "", "0.87.1");
     const Plan notElevated = makePlan(machine, Action::Install, false);
-    CHECK(notElevated.state == PlanState::Blocked);
-    CHECK(!notElevated.blockedReason.empty());
+    CHECK(notElevated.state == PlanState::Draft);
+    CHECK(notElevated.blockedReason.empty());
+    auto global = makePackage(Manager::Scoop, "main", "git", Scope::Global, "", "2.0");
+    CHECK(makePlan(global, Action::Install, false).state == PlanState::Blocked);
     // Elevation is not a licence to skip the rest: the plan is still a Draft
     // that needs material and a preflight, never Ready on its own.
     const Plan elevated = makePlan(machine, Action::Install, true);
@@ -639,6 +666,8 @@ void diskCache()
     original.scanScope = "installed";
     original.winget = BackendState::Ready;
     original.wingetDetail = "winget 1.29.380";
+    original.wingetObservedAt = "2026-11-12T09:28:00Z";
+    original.scoopObservedAt = "2026-11-12T09:30:00Z";
     original.scoop = BackendState::Denied;
     // A detail string with the characters that break naive JSON writers.
     original.scoopDetail = "quote \" backslash \\ tab \t and 中文";
@@ -660,6 +689,10 @@ void diskCache()
     CHECK(cache::parse(text, restored, error));
     CHECK(error.empty());
     CHECK(restored.observedAt == original.observedAt);
+    // Each backend's own stamp survives, which is what lets a later refresh
+    // re-query only the part that is actually old.
+    CHECK(restored.wingetObservedAt == original.wingetObservedAt);
+    CHECK(restored.scoopObservedAt == original.scoopObservedAt);
     CHECK(restored.winget == BackendState::Ready);
     CHECK(restored.scoop == BackendState::Denied);
     // The escaping round-trips: a detail with quotes, a backslash and UTF-8 is
@@ -674,8 +707,24 @@ void diskCache()
     CHECK(restored.packages[0].holdPolicy == "pinned @14.1.0");
     CHECK(restored.packages[0].limits == p.limits);
     CHECK(restored.packages[0].canUpgrade == p.canUpgrade);
-    CHECK(restored.packages[1].provenance == Provenance::Observed);
-    CHECK(restored.packages[1].key.source == "main");
+    CHECK(restored.packages[1].provenance == Provenance::Observed);    CHECK(restored.packages[1].key.source == "main");
+
+    // A cache written before per-backend stamps existed still loads: both stamps
+    // fall back to the whole-snapshot time, so freshness behaves as it did then.
+    {
+        std::string legacy = text;
+        for (const std::string key : {std::string("\"wingetAt\":\"2026-11-12T09:28:00Z\","),
+                                      std::string("\"scoopAt\":\"2026-11-12T09:30:00Z\",")}) {
+            const auto at = legacy.find(key);
+            if (at != std::string::npos)
+                legacy.erase(at, key.size());
+        }
+        Snapshot legacyParsed;
+        std::string legacyError;
+        CHECK(cache::parse(legacy, legacyParsed, legacyError));
+        CHECK(legacyParsed.wingetObservedAt == legacyParsed.observedAt);
+        CHECK(legacyParsed.scoopObservedAt == legacyParsed.observedAt);
+    }
 
     // The update listing is cached beside the inventory. It is the most expensive
     // query in a scan, and leaving it out meant every restart showed an empty
@@ -728,6 +777,293 @@ void diskCache()
     CHECK(cache::worthWriting(original));
 }
 
+// The `winget show` metadata cache: keyed by exact id (compared
+// case-insensitively — list and show recase freely), LRU-capped, and the same
+// atomic-file contract as the inventory cache.
+void infoCacheRules()
+{
+    section("info cache (T20)");
+    info_cache::Store store;
+    info_cache::Entry a;
+    a.id = "Docker.DockerDesktop";
+    a.observedAt = "2026-11-14T06:00:00Z";
+    a.fields["homepage"] = "https://docker.com";
+    a.fields["publisher"] = "Docker Inc.";
+    info_cache::upsert(store, std::move(a));
+
+    // Case-insensitive lookup: list and show recase ids freely.
+    info_cache::Entry hit;
+    CHECK(info_cache::find(store, "docker.dockerdesktop", hit));
+    CHECK(hit.fields.at("homepage") == "https://docker.com");
+    CHECK(!info_cache::find(store, "Other.Package", hit));
+    CHECK(!info_cache::find(store, "", hit));
+
+    // An upsert refreshes in place (no duplicate) and moves to the back.
+    info_cache::Entry b;
+    b.id = "7zip.7zip";
+    b.observedAt = "2026-11-14T06:30:00Z";
+    info_cache::upsert(store, std::move(b));
+    info_cache::Entry refreshed = hit;
+    refreshed.observedAt = "2026-11-14T07:00:00Z";
+    info_cache::upsert(store, std::move(refreshed));
+    CHECK(store.entries.size() == 2);
+    CHECK(store.entries.back().id == "Docker.DockerDesktop");
+    CHECK(store.entries.front().id == "7zip.7zip");
+
+    // The LRU cap evicts the oldest first: after the fill the two originals
+    // and the earliest fills are gone, the newest fills remain.
+    for (int i = 0; i < 205; ++i) {
+        info_cache::Entry fill;
+        fill.id = "Fill.Package." + std::to_string(i);
+        fill.observedAt = "2026-11-14T08:00:00Z";
+        fill.fields["homepage"] = "fill://" + fill.id;
+        info_cache::upsert(store, std::move(fill), 200);
+    }
+    CHECK(store.entries.size() == 200);
+    CHECK(!info_cache::find(store, "7zip.7zip", hit));              // oldest, evicted
+    CHECK(!info_cache::find(store, "Docker.DockerDesktop", hit));   // second oldest, evicted too
+    CHECK(!info_cache::find(store, "Fill.Package.0", hit));
+    CHECK(info_cache::find(store, "Fill.Package.204", hit));
+
+    // The fetch is pinned to the version it was made for: the metadata of a
+    // package installed at 1.2.3 does not change just because it is a day old,
+    // so an entry for that same version stays usable while the version matches.
+    info_cache::Entry versioned;
+    versioned.id = "Version.Pinned";
+    versioned.observedAt = "2026-11-14T08:00:00Z";
+    versioned.version = "1.2.3";
+    versioned.fields["version"] = "1.2.3";
+    info_cache::upsert(store, std::move(versioned));
+    CHECK(info_cache::find(store, "version.pinned", hit));
+    CHECK(info_cache::stillMatches(hit, "1.2.3"));
+    CHECK(!info_cache::stillMatches(hit, "1.2.4"));   // the package changed
+    CHECK(!info_cache::stillMatches(hit, ""));        // not an installed row
+    info_cache::Entry unversioned;
+    unversioned.id = "Old.Entry";
+    unversioned.observedAt = "2026-11-14T08:00:00Z";
+    CHECK(!info_cache::stillMatches(unversioned, "1.2.3"));   // entry from an older build
+
+    // Round trip; failures are the caller's problem and are never stored.
+    const std::string text = info_cache::serialize(store);
+    info_cache::Store restored;
+    std::string error;
+    CHECK(info_cache::parse(text, restored, error));
+    CHECK(restored.entries.size() == store.entries.size());
+    info_cache::Entry roundtrip;
+    if (info_cache::find(restored, "Fill.Package.204", roundtrip)) {
+        CHECK(roundtrip.observedAt == "2026-11-14T08:00:00Z");
+        CHECK(roundtrip.fields.at("homepage") == "fill://Fill.Package.204");
+    } else {
+        CHECK(false);   // the newest entry must survive the round trip
+    }
+    if (info_cache::find(restored, "Version.Pinned", roundtrip))
+        CHECK(roundtrip.version == "1.2.3");
+    else
+        CHECK(false);
+
+    // A file this build does not understand is refused, never half-read.
+    CHECK(!info_cache::parse("not json", restored, error));
+    CHECK(!error.empty());
+    error.clear();
+    CHECK(!info_cache::parse("{\"infoVersion\":99,\"entries\":[]}", restored, error));
+    CHECK(error.find("different version") != std::string::npos);
+    error.clear();
+    CHECK(!info_cache::parse("{\"infoVersion\":1}", restored, error));
+    // An entry without an id can never be looked up, so it is skipped.
+    CHECK(info_cache::parse(
+        "{\"infoVersion\":1,\"entries\":[{\"observedAt\":\"x\",\"fields\":{}},"
+        "{\"id\":\"Ok.Package\",\"observedAt\":\"y\",\"fields\":{\"k\":\"v\"}}]}",
+        restored, error));
+    CHECK(restored.entries.size() == 1);
+    CHECK(restored.entries[0].id == "Ok.Package");
+}
+
+// Discover search cache: the query key must be stable and the entry must
+// round-trip through the inventory format, because that is what a repeat
+// search reads instead of spawning two backends.
+void searchCacheRules()
+{
+    section("search cache");
+
+    // Case and whitespace must not create two entries: both backends match
+    // case-insensitively, so "Vim" and "  vim  " are the same query.
+    CHECK(search_cache::normalizeQuery("Vim") == "vim");
+    CHECK(search_cache::normalizeQuery("  vim  ") == "vim");
+    CHECK(search_cache::normalizeQuery("Visual   Studio\tCode") == "visual studio code");
+    CHECK(search_cache::normalizeQuery("") == "");
+    CHECK(search_cache::normalizeQuery("   ") == "");
+
+    // The file name is stable across runs and safe for the filesystem.
+    const std::string a = search_cache::fileStem("Vim");
+    const std::string b = search_cache::fileStem("  vim ");
+    CHECK(a == b);
+    CHECK(a.size() == 16);
+    for (const char c : a)
+        CHECK((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'));
+    CHECK(search_cache::fileStem("vim") != search_cache::fileStem("emacs"));
+    // A query with path characters cannot escape the cache folder.
+    CHECK(search_cache::fileStem("..\\..\\evil").find('\\') == std::string::npos);
+
+    CHECK(search_cache::pathFor("C:\\data", "Vim") ==
+          "C:\\data\\search\\" + search_cache::fileStem("Vim") + ".json");
+
+    // Round trip through the inventory format used for search snapshots.
+    Snapshot snapshot;
+    snapshot.observedAt = "2026-11-15T06:30:00Z";
+    snapshot.scanScope = "search";
+    snapshot.winget = BackendState::Ready;
+    snapshot.scoop = BackendState::Ready;
+    Package p;
+    p.key.manager = Manager::Winget;
+    p.key.source = "winget";
+    p.key.id = "jqlang.jq";
+    p.key.scope = Scope::Unknown;
+    p.name = "jq";
+    p.availableVersion = "1.7.1";
+    p.availableKind = "version";
+    p.canInstall = true;
+    snapshot.packages.push_back(p);
+
+    CHECK(search_cache::worthWriting(snapshot));
+    const std::string text = search_cache::serialize(snapshot);
+    Snapshot restored;
+    std::string error;
+    CHECK(search_cache::parse(text, restored, error));
+    CHECK(restored.winget == BackendState::Ready);
+    CHECK(restored.observedAt == snapshot.observedAt);
+    CHECK(restored.packages.size() == 1);
+    if (!restored.packages.empty()) {
+        CHECK(restored.packages[0].key.id == "jqlang.jq");
+        CHECK(restored.packages[0].canInstall);
+    }
+
+    // A failed scan must never overwrite a good entry, and an entry without a
+    // timestamp cannot be judged fresh.
+    Snapshot failed;
+    failed.observedAt = "2026-11-15T06:30:00Z";
+    failed.winget = BackendState::Denied;
+    failed.scoop = BackendState::Unsupported;
+    CHECK(!search_cache::worthWriting(failed));
+    Snapshot untimed;
+    untimed.winget = BackendState::Ready;
+    CHECK(!search_cache::worthWriting(untimed));
+
+    // An empty result from a backend that ran IS an answer worth caching.
+    Snapshot empty;
+    empty.observedAt = "2026-11-15T06:30:00Z";
+    empty.winget = BackendState::Ready;
+    CHECK(search_cache::worthWriting(empty));
+
+    Snapshot junk;
+    CHECK(!search_cache::parse("not json", junk, error));
+}
+
+// A remembered probe verdict is only reused for the very file that produced it,
+// and only when it says something a query can build on.
+void probeCacheRules()
+{
+    section("probe cache");
+
+    probe_cache::Record ready;
+    ready.state = BackendState::Ready;
+    ready.version = "v1.29.380";
+    ready.program = "C:\\Users\\x\\AppData\\Local\\Microsoft\\WindowsApps\\winget.exe";
+    ready.stamp = "1234:638000000000000000";
+    ready.detail = "";
+    ready.observedAt = "2026-11-15T07:00:00Z";
+
+    // Same file: reusable. Different size/write-time: must probe again.
+    CHECK(probe_cache::reusable(ready, ready.stamp));
+    CHECK(!probe_cache::reusable(ready, "1234:638000000000000001"));
+    CHECK(!probe_cache::reusable(ready, ""));          // the file vanished
+    CHECK(!probe_cache::reusable(ready, ready.stamp) == false);
+
+    // A refusal is never reused: it is the case most likely to be transient.
+    probe_cache::Record denied = ready;
+    denied.state = BackendState::Denied;
+    CHECK(!probe_cache::reusable(denied, denied.stamp));
+    probe_cache::Record missing = ready;
+    missing.state = BackendState::Missing;
+    CHECK(!probe_cache::reusable(missing, missing.stamp));
+
+    // Unsupported is reused: running the probe again would give the same answer
+    // for the same binary, and the UI already explains it.
+    probe_cache::Record unsupported = ready;
+    unsupported.state = BackendState::Unsupported;
+    CHECK(probe_cache::reusable(unsupported, unsupported.stamp));
+
+    // Round trip, including text that has to be escaped.
+    probe_cache::Store store;
+    store.winget = ready;
+    store.hasWinget = true;
+    store.scoop.state = BackendState::Ready;
+    store.scoop.version = "unknown";
+    store.scoop.program = "C:\\Users\\x\\scoop\\shims\\scoop.ps1";
+    store.scoop.stamp = "99:638000000000000099";
+    store.scoop.detail = "say \"hi\"\nsecond line";
+    store.hasScoop = true;
+
+    const std::string text = probe_cache::serialize(store);
+    probe_cache::Store restored;
+    std::string error;
+    CHECK(probe_cache::parse(text, restored, error));
+    CHECK(restored.hasWinget && restored.hasScoop);
+    CHECK(restored.winget.state == BackendState::Ready);
+    CHECK(restored.winget.version == "v1.29.380");
+    CHECK(restored.winget.stamp == ready.stamp);
+    CHECK(restored.scoop.detail == store.scoop.detail);
+
+    // Files this build does not understand are refused, never half-read.
+    CHECK(!probe_cache::parse("not json", restored, error));
+    error.clear();
+    CHECK(!probe_cache::parse("{\"probeVersion\":2,\"winget\":{}}", restored, error));
+    // A record without a stamp cannot be matched to a file, so it is ignored.
+    error.clear();
+    CHECK(!probe_cache::parse(
+        "{\"probeVersion\":1,\"winget\":{\"state\":\"ready\",\"program\":\"x\"}}", restored, error));
+}
+
+// The pin list is cached like the inventory: policy data whose loss would let a
+// pinned package be offered for upgrade.
+void pinsCacheRules()
+{
+    section("pin cache");
+
+    pins_cache::Store store;
+    store.observedAt = "2026-11-15T07:10:00Z";
+    store.entries = {{"Microsoft.PowerToys", "pinned"}, {"7zip.7zip", "blocking"}};
+
+    const std::string text = pins_cache::serialize(store);
+    pins_cache::Store restored;
+    std::string error;
+    CHECK(pins_cache::parse(text, restored, error));
+    CHECK(restored.observedAt == store.observedAt);
+    CHECK(restored.entries.size() == 2);
+    CHECK(restored.entries[0].first == "Microsoft.PowerToys");
+    CHECK(restored.entries[0].second == "pinned");
+
+    // An empty list is a real answer ("nothing is pinned") and must round-trip.
+    pins_cache::Store empty;
+    empty.observedAt = "2026-11-15T07:10:00Z";
+    pins_cache::Store emptyRestored;
+    CHECK(pins_cache::parse(pins_cache::serialize(empty), emptyRestored, error));
+    CHECK(emptyRestored.entries.empty());
+    CHECK(emptyRestored.observedAt == empty.observedAt);
+
+    // Unknown shapes are refused rather than read as "nothing is pinned", which
+    // would silently allow upgrading a held package.
+    CHECK(!pins_cache::parse("not json", restored, error));
+    error.clear();
+    CHECK(!pins_cache::parse("{\"pinsVersion\":2,\"entries\":[]}", restored, error));
+    error.clear();
+    CHECK(!pins_cache::parse("{\"pinsVersion\":1}", restored, error));
+    error.clear();
+    CHECK(pins_cache::parse(
+        "{\"pinsVersion\":1,\"observedAt\":\"t\",\"entries\":[{\"policy\":\"pinned\"},"
+        "{\"id\":\"Ok.Package\",\"policy\":\"pinned\"}]}", restored, error));
+    CHECK(restored.entries.size() == 1);   // the entry without an id is skipped
+}
+
 } // namespace
 
 int main()
@@ -745,6 +1081,10 @@ int main()
     queueIntervention();
     redaction();
     diskCache();
+    infoCacheRules();
+    searchCacheRules();
+    probeCacheRules();
+    pinsCacheRules();
     grouping();
 
     std::printf("\n%d checks, %d failure(s)\n", g_checks, g_failures);

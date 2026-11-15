@@ -49,8 +49,20 @@ pkg::ui::UiSettings readSettings(const winshun::Json& settings)
         out.showObserved = settings["showObserved"].toBool(true);
     if (settings.has("refreshMinutes"))
         out.refreshMinutes = static_cast<int>(settings["refreshMinutes"].toInt(30));
+    if (settings.has("autoFetchInfo"))
+        out.autoFetchInfo = settings["autoFetchInfo"].toBool(true);
     if (settings.has("debugLogging"))
         out.debugLogging = settings["debugLogging"].toBool(false);
+    // The scan policy: "stale" (default) | "always" | "never".
+    if (settings.has("scanOnOpen")) {
+        const std::string mode = text("scanOnOpen");
+        if (mode == "stale" || mode == "always" || mode == "never")
+            out.scanOnOpen = mode;
+    }
+    if (settings.has("scanOnStartup"))
+        out.scanOnStartup = settings["scanOnStartup"].toBool(false);
+    // Ignore the retired administrator-scan preference from older installations.
+    out.requireAdminForScan = false;
     return out;
 }
 
@@ -84,18 +96,47 @@ public:
 
     winshun::Effects action(const winshun::ActionRequest& request) override
     {
-        (void)request;
         // The effect only hides the search box. The window itself is created on
         // the GUI thread, so the request is marshalled rather than built here.
+        //
+        // The three search entries mean three different things, and the command
+        // id is what tells them apart:
+        //   "packages"          -> follow the scan policy in the settings;
+        //   "packages-open-only"-> show the cache, never query a backend;
+        //   "packages-refresh"  -> always re-query, ignoring the cache's age.
+        pkg::ui::OpenMode mode = pkg::ui::OpenMode::Default;
+        if (request.command == "packages-open-only")
+            mode = pkg::ui::OpenMode::NoScan;
+        else if (request.command == "packages-refresh")
+            mode = pkg::ui::OpenMode::ForceRefresh;
+
+        // The words the user typed go into the window's own search box, so
+        // "packages jq" opens on the query instead of on an empty list.
+        const QString needle = QString::fromStdString(request.text).trimmed();
         if (auto* controller = ui()) {
-            QMetaObject::invokeMethod(controller, [controller] { controller->openWindow(); }, Qt::QueuedConnection);
+            QMetaObject::invokeMethod(
+                controller,
+                [controller, mode, needle] {
+                    if (!needle.isEmpty())
+                        controller->setSearchText(needle);
+                    controller->openWindow(mode);
+                },
+                Qt::QueuedConnection);
         }
         return {winshun::effect::hide()};
     }
 
     void initialized() override
     {
-        settingsChanged(winshun::Json::Object{});
+        // The host sends the plugin's settings with the initialize message, and
+        // `settings()` holds them. Calling settingsChanged with an empty object
+        // — as this used to — threw the user's own settings away and replaced
+        // them with the defaults, so a configured scan policy was lost the
+        // moment the plugin started.
+        settingsChanged(settings());
+        if (auto* controller = ui())
+            QMetaObject::invokeMethod(controller, [controller] { controller->runStartupScan(); },
+                                      Qt::QueuedConnection);
         if (auto* controller = ui()) {
             const QVariantMap look = appearanceLook();
             QMetaObject::invokeMethod(
@@ -198,6 +239,18 @@ int main(int argc, char** argv)
     // The protocol loop owns stdio and never touches a QObject directly.
     PackagesPlugin plugin;
     plugin.setController(&controller);
+    controller.setClipboardWriter([&plugin](const QString& value,
+                                             std::function<void(bool, const QString&)> done) {
+        plugin.toolAsync("clipboard_copy", winshun::Json::Object {{"text", value.toStdString()}},
+                         [done = std::move(done)](winshun::Json result) mutable {
+                             if (result.has("error")) {
+                                 const auto& error = result["error"];
+                                 done(false, QString::fromStdString(error["message"].toString()));
+                             } else {
+                                 done(true, {});
+                             }
+                         });
+    });
 
     std::thread protocol([&plugin] {
         plugin.serve();

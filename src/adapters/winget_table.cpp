@@ -176,6 +176,77 @@ bool columnPlausible(const std::string& title, const std::string& value)
     return true;   // Match / Source / Pinned Version / Blocking: free text
 }
 
+// Whether every column has the shape that column really has in WinGet output.
+bool columnsPlausible(const std::vector<std::string>& titles, const std::vector<std::string>& cells)
+{
+    if (cells.size() != titles.size())
+        return false;
+    for (std::size_t c = 0; c < titles.size(); ++c)
+        if (!columnPlausible(titles[c], cells[c]))
+            return false;
+    return true;
+}
+
+// Map console display columns to UTF-8 byte offsets without cutting a codepoint.
+std::size_t displayOffset(const std::string& line, std::size_t column)
+{
+    std::size_t at = 0, width = 0;
+    while (at < line.size() && width < column) {
+        const auto lead = static_cast<unsigned char>(line[at]);
+        std::size_t bytes = lead < 0x80 ? 1 : lead < 0xe0 ? 2 : lead < 0xf0 ? 3 : 4;
+        if (at + bytes > line.size())
+            return line.size();
+        unsigned code = lead & (bytes == 1 ? 0x7f : bytes == 2 ? 0x1f : bytes == 3 ? 0x0f : 0x07);
+        for (std::size_t j = 1; j < bytes; ++j)
+            code = (code << 6) | (static_cast<unsigned char>(line[at + j]) & 0x3f);
+        const bool wide = (code >= 0x1100 && code <= 0x115f) ||
+                          (code >= 0x2e80 && code <= 0xa4cf) ||
+                          (code >= 0xac00 && code <= 0xd7a3) ||
+                          (code >= 0xf900 && code <= 0xfaff) ||
+                          (code >= 0xfe10 && code <= 0xfe6f) ||
+                          (code >= 0xff01 && code <= 0xff60) ||
+                          (code >= 0x1f300 && code <= 0x1faff) || code >= 0x20000;
+        width += wide ? 2 : 1;
+        at += bytes;
+    }
+    return at;
+}
+
+// Slices a row at the header's column offsets and accepts it only when every
+// column has the shape that column really has. The offsets come from the
+// header, so a row whose columns are separated by a single space still reads
+// correctly; a name wider than its column spills into the next cell and is
+// rejected here, which sends the row to the run-of-spaces reading instead.
+bool sliceByPositions(const std::string& line, const std::vector<std::size_t>& starts,
+                       const std::vector<std::string>& titles, std::vector<std::string>& out)
+{
+    if (starts.size() != titles.size() || titles.size() < 2)
+        return false;
+    std::vector<std::string> cells;
+    cells.reserve(starts.size());
+    for (std::size_t i = 0; i < starts.size(); ++i) {
+        const std::size_t beg = displayOffset(line, starts[i]);
+        if (beg >= line.size()) {
+            cells.emplace_back();
+            continue;
+        }
+        std::size_t end = (i + 1 < starts.size()) ? displayOffset(line, starts[i + 1]) : line.size();
+        // A boundary inside a token proves the geometry does not fit this row.
+        if (end < line.size() && end > 0 && line[end] != ' ' && line[end - 1] != ' ')
+            return false;
+        if (end > line.size())
+            end = line.size();
+        if (end < beg)
+            end = beg;
+        cells.push_back(trim(line.substr(beg, end - beg)));
+    }
+    if (!columnsPlausible(titles, cells))
+        return false;
+    out = std::move(cells);
+    return true;
+}
+
+
 // Reads `fields` as `count` columns by merging the first `k` into one and padding
 // the tail, which covers both "last column empty" and "name spilled over".
 bool tryReading(const std::vector<std::string>& fields, std::size_t k, std::size_t count,
@@ -214,9 +285,13 @@ Table parseWith(const std::vector<std::string>& titles, const std::vector<std::s
     }
 
     std::vector<std::string> keptTitles;
-    for (std::size_t i = 0; i < titles.size(); ++i)
-        if (starts[i] != std::string::npos)
-            keptTitles.push_back(titles[i]);
+    std::vector<std::size_t> keptStarts;
+    for (std::size_t i = 0; i < titles.size(); ++i) {
+        if (starts[i] == std::string::npos)
+            continue;
+        keptTitles.push_back(titles[i]);
+        keptStarts.push_back(starts[i]);
+    }
     if (keptTitles.size() < 2) {
         table.failure.reason = "fewer than two columns could be located in the header";
         return table;
@@ -232,18 +307,39 @@ Table parseWith(const std::vector<std::string>& titles, const std::vector<std::s
 
         std::vector<std::string> chosen;
         bool decided = false;
+
+        // First reading: slice the row at the header's column offsets. WinGet
+        // aligns its columns, and this is the only reading that survives a row
+        // whose columns are separated by a SINGLE space: the real output of
+        // `winget list --id iOfficeAI.OfficeCLI --exact` is
+        //
+        //   Name      Id                  Version
+        //   -------------------------------------
+        //   OfficeCLI iOfficeAI.OfficeCLI 1.0.161
+        //
+        // whose data row has one space between "OfficeCLI" and the id, so a
+        // split on runs of spaces yields a single field and the row was
+        // silently dropped — the plugin then reported "not found" for a package
+        // WinGet had just listed.
+        if (fields.size() < 2 && sliceByPositions(lines[i], keptStarts, keptTitles, chosen) &&
+            columnsPlausible(keptTitles, chosen)) {
+            decided = true;
+        }
+
+        // Second reading: the historical split on runs of spaces, merged into
+        // the columns. It still handles a name wider than its column, and rows
+        // whose columns are aligned differently from the header.
         for (std::size_t k = 1; k <= fields.size() && !decided; ++k) {
             std::vector<std::string> candidate;
             if (!tryReading(fields, k, keptTitles.size(), candidate))
                 continue;
-            bool ok = true;
-            for (std::size_t c = 0; c < keptTitles.size() && ok; ++c)
-                ok = columnPlausible(keptTitles[c], candidate[c]);
-            if (ok) {
+            if (columnsPlausible(keptTitles, candidate)) {
                 chosen = std::move(candidate);
                 decided = true;
             }
         }
+        if (!decided && sliceByPositions(lines[i], keptStarts, keptTitles, chosen))
+            decided = true;
         if (!decided) {
             // No reading fits: count it and move on, so the caller can report an
             // incomplete read instead of a guess.

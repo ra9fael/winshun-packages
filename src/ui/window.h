@@ -25,6 +25,7 @@
 #include <vector>
 
 #include "../adapters/adapter.h"
+#include "../core/info_cache.h"
 #include "../core/model.h"
 #include "../core/plan.h"
 #include "../core/queue.h"
@@ -40,6 +41,27 @@ struct UiSettings {
     bool showObserved = true;
     int refreshMinutes = 30;
     bool debugLogging = false;
+    // Fetch `winget show` automatically when a row is selected (the 0.3.0
+    // behaviour). Off, only the details-pane buttons fetch, and the info cache
+    // still serves whatever was already fetched.
+    bool autoFetchInfo = true;
+    // When the window opens: "stale" (scan only when the cache has expired),
+    // "always" (scan every time) or "never" (show the cache only).
+    std::string scanOnOpen = "stale";
+    // Scan once in the background after WinShun starts. The plugin then has to
+    // stay resident, which is what `runtime.start: eager` is for.
+    bool scanOnStartup = false;
+    // Only scan while the process actually holds administrator rights.
+    bool requireAdminForScan = false;
+};
+
+// How the window was opened. The search bar offers three entries and they mean
+// three different things: "open" follows the scan policy, "open only" shows the
+// cache without touching a backend, and "refresh" forces a fresh query.
+enum class OpenMode {
+    Default,      // follow the scanOnOpen policy
+    NoScan,       // never query a backend because of opening
+    ForceRefresh, // always re-query, ignoring the cache's age
 };
 
 class Controller : public QObject {
@@ -80,6 +102,22 @@ class Controller : public QObject {
     Q_PROPERTY(int checkedCount READ checkedCount NOTIFY selectionChanged)
     Q_PROPERTY(QString selectionSummary READ selectionSummary NOTIFY selectionChanged)
     Q_PROPERTY(bool busy READ busy NOTIFY statusChanged)
+    // What a running scan is doing right now ("WinGet 更新列表…"), for the
+    // status bar. A scan takes tens of seconds and touches four queries; one
+    // word of "Querying…" made every step of it look stuck.
+    Q_PROPERTY(QString scanStage READ scanStage NOTIFY statusChanged)
+    // The plugin's four host-managed settings, as the user set them on the
+    // plugin card, for the window's settings popup. The plugin cannot write
+    // settings back (the SDK has no such channel); the popup shows the values
+    // and points at the card.
+    Q_PROPERTY(QString settingsSummary READ settingsSummary NOTIFY settingsApplied)
+    // Data-folder path, cache file sizes and scan time, for the settings
+    // popup's cache section and its "clear cache" button.
+    Q_PROPERTY(QString cacheSummary READ cacheSummary NOTIFY statusChanged)
+    // Why a scan did not run when the policy says it should have (a scan that
+    // needs administrator rights, for example). Empty when there is nothing to
+    // explain.
+    Q_PROPERTY(QString scanPolicyNote READ scanPolicyNote NOTIFY scanPolicyNoteChanged)
     Q_PROPERTY(QString statePane READ statePane NOTIFY statePaneChanged)
     Q_PROPERTY(QString stateTitle READ stateTitle NOTIFY statePaneChanged)
     Q_PROPERTY(QString stateBody READ stateBody NOTIFY statePaneChanged)
@@ -90,6 +128,11 @@ class Controller : public QObject {
     Q_PROPERTY(bool reviewConfirmEnabled READ reviewConfirmEnabled NOTIFY reviewChanged)
     Q_PROPERTY(QString reviewGateText READ reviewGateText NOTIFY reviewChanged)
     Q_PROPERTY(QString reviewAction READ reviewAction NOTIFY reviewChanged)
+    // Per-package plans of the review batch, in checked order. One row is the
+    // common case and renders as before; several rows list each package's own
+    // plan and blocker, and the confirm enqueues the runnable ones.
+    Q_PROPERTY(QVariantList reviewRows READ reviewRows NOTIFY reviewChanged)
+    Q_PROPERTY(int reviewBatchCount READ reviewBatchCount NOTIFY reviewChanged)
     // Actions the current review may legally take (upgrade/uninstall/install),
     // each as {id,label,why}. The plugin no longer infers one: installed with an
     // update available offers both, and the user picks.
@@ -137,8 +180,17 @@ public:
     // Called from the protocol thread; each marshals to the GUI thread.
     void applyAppearance(const QString& locale, bool dark, const QVariantMap& nativeLook);
     void applySettings(const UiSettings& settings);
-    void openWindow();
-    void refreshAll();
+    void setClipboardWriter(std::function<void(const QString&, std::function<void(bool, const QString&)>)> writer)
+    { m_clipboardWriter = std::move(writer); }
+    // Opens the window. `mode` says how: Default follows the scan policy,
+    // NoScan shows the cache without touching a backend, ForceRefresh always
+    // re-queries.
+    void openWindow(OpenMode mode = OpenMode::Default);
+    // The scan the user asked for at startup (settings: scanOnStartup). It runs
+    // without opening a window, and it is a no-op unless the plugin is allowed
+    // to scan under the current rights.
+    void runStartupScan();
+    Q_INVOKABLE void refreshAll();
     void shutdown();
     // Injects a search result directly. Only the development harness uses it: a
     // --fake run starts no backend, so a fake search would otherwise stay empty and
@@ -188,6 +240,11 @@ public:
     // the buttons' enabled state is explained rather than guessed.
     QString selectionSummary() const;
     bool busy() const { return m_busy; }
+    QString scanStage() const { return m_scanStage; }
+    QString settingsSummary() const;
+    QString cacheSummary() const;
+    QString dataPath() const;
+    QString scanPolicyNote() const { return m_scanPolicyNote; }
     QString statePane() const { return m_statePane; }
     QString stateTitle() const;
     QString stateBody() const;
@@ -199,6 +256,8 @@ public:
     QString reviewGateText() const;
     QString reviewAction() const { return m_reviewAction; }
     QVariantList reviewActions() const { return m_reviewActions; }
+    QVariantList reviewRows() const { return m_reviewRows; }
+    int reviewBatchCount() const { return static_cast<int>(m_reviewPlans.size()); }
     QString reviewActionLabel() const;
     QString reviewMethod() const;
     QString reviewRisk() const;
@@ -261,6 +320,12 @@ public slots:
     // report instead of being read off the screen. The log is already redacted
     // when it is written, so nothing here needs to sanitise it again.
     Q_INVOKABLE void copyTaskLog(qulonglong id);
+    // Deletes cache.json and info.json from the data folder and resets the
+    // in-memory snapshots, so the next refresh rebuilds everything from the
+    // backends. The settings popup's 缓存 section owns the button.
+    Q_INVOKABLE void clearCache();
+    Q_INVOKABLE void copyDataPath();
+    Q_INVOKABLE void openDataFolder();
     // Opens the package's project/home page in the default browser. Read-only and
     // outside any manager: for a package that is not installed yet, looking it up
     // is often what the user wants instead of an immediate install.
@@ -284,6 +349,7 @@ public slots:
     // Choosing the action is the user's decision, not a plugin inference: the
     // same installed package can be upgraded or uninstalled.
     void setReviewAction(const QString& actionId);
+    Q_INVOKABLE void setInstallScope(const QString& scope);
     // Per-task operations, all by id. The old versions scanned for "the last
     // one", which let the wrong row be cancelled or removed.
     void cancelTask(qulonglong id);
@@ -311,18 +377,24 @@ signals:
     void statePaneChanged();
     void reviewChanged();
     void tasksChanged();
+    // The host-managed settings changed (initialize or settingsChanged), so the
+    // settings popup's summary must re-read.
+    void settingsApplied();
+    // A scan was skipped for a reason the user should see (rights, policy).
+    void scanPolicyNoteChanged();
     // Emitted when the window should be shown or hidden (GUI thread only).
     void windowShouldShow();
     void windowShouldClose();
 
 private:
+    void copyUsingHost(const QString& text, const QString& successMessage);
     void rebuildRows();
     void rebuildDuplicates();
     // True when the installed snapshot already contains this exact identity. Used
     // by the Discover filter, which needs to know whether a search result is
     // something the user already has.
     bool isInstalled(const PackageKey& key) const;
-    void startBackendRefresh();
+    void startBackendRefresh(bool force = false);
     void startSearchWorker();
     // Own detached-style workers until completion. The host may shut down the
     // plugin while a queued installer is open; the controller signals cancel and
@@ -332,7 +404,15 @@ private:
     void applySearchResults(const QString& needle, const Snapshot& wingetSearch, const Snapshot& scoopSearch);
     void applyRefreshResults(const ProbeResult& wingetProbe, const ProbeResult& scoopProbe,
                              const Snapshot& wingetInstalled, const Snapshot& scoopInstalled,
-                             const Snapshot& wingetUpdates, const Snapshot& scoopUpdates);
+                             const Snapshot& wingetUpdates, const Snapshot& scoopUpdates,
+                             bool scannedWinget, bool scannedScoop);
+    // Rebuilds the combined snapshots and rows from the per-backend parts, then
+    // persists them. Split out so a partial refresh and a full one share exactly
+    // one code path for what the window shows.
+    void publishInventory();
+    // True when this backend's part is missing, older than refreshMinutes, or the
+    // last attempt did not end Ready.
+    bool backendNeedsScan(const std::string& observedAt, BackendState state) const;
     // The mutation executor: picks the next runnable task and runs its commands
     // on a worker thread. confirmAndQueue starts it; it drains until every lane
     // is idle, then refreshes the inventory so the list reflects what really
@@ -345,10 +425,48 @@ private:
     QString cachePath() const;
     void loadCache();
     void saveCache();
+    // The `winget show` metadata cache (info.json in the same data folder),
+    // keyed by exact id and expiring on the same refreshMinutes the inventory
+    // cache uses.
+    QString infoPath() const;
+    void loadInfoCache();
+    void saveInfoCache();
+    // True when `observedAt` is within refreshMinutes of now. An unparsable
+    // timestamp is stale: refetching costs a process, a stale hit costs wrong
+    // data on screen.
+    bool infoFresh(const std::string& observedAt) const;
+    // The Discover search cache: one file per normalised query under
+    // <data>\search (search_cache.h). A fresh answer is applied without touching
+    // a backend; a stale one is searched again and then stored.
+    QString searchCachePath(const QString& needle) const;
+    bool applyCachedSearch(const QString& needle);
+    void saveSearchCache(const QString& needle, const Snapshot& snapshot);
+    // A mutation changes what a search would return (a package that was just
+    // installed must stop being offered), so the whole search cache is dropped
+    // when a task finishes rather than trusted for its TTL.
+    void clearSearchCache();
+    // The backend probe verdict (probe.json), reused only while the probed
+    // executable is byte-for-byte the same file: this is what saves the two
+    // WinGet probe processes on every new plugin process.
+    QString probePath() const;
+    void loadProbeCache();
+    void saveProbeCache();
+    // The pin list (pins.json): policy data that only a pin/unpin changes, so it
+    // is seeded from disk instead of costing one WinGet process per refresh and
+    // per plugin launch.
+    QString pinsPath() const;
+    void loadPinsCache();
+    void savePinsCache();
+    void clearPinsCache();
+    // Fills the details pane from a cached entry without touching a backend.
+    void showCachedInfo(const info_cache::Entry& entry, int row, const std::string& id);
     // Recomputes the plan/facts for m_reviewPackage with the given action and
     // republishes the review. Used by openReview and setReviewAction so the two
     // paths can never disagree.
     void buildReview(Action action);
+    // The method line for one package under one action (single facts and the
+    // batch rows share it; a batch may mix managers).
+    QString reviewMethodFor(const Package& p, Action action) const;
     // Appends one redacted line to a task's log. Every log write goes through
     // here: a task log can carry local paths and backend output, and neither may
     // reach the UI unredacted.
@@ -365,10 +483,18 @@ private:
 
     Snapshot m_installed;
     Snapshot m_updates;
+    // Per-backend parts. A refresh may only re-query one backend (the other is
+    // still fresh), so the rows and timestamp of the skipped backend must be
+    // carried over instead of being rebuilt from a query that did not run.
+    Snapshot m_wingetInstalled;
     Snapshot m_scoopInstalled;
+    Snapshot m_wingetUpdates;
+    Snapshot m_scoopUpdates;
     Snapshot m_search;
     ProbeResult m_wingetProbe;
     ProbeResult m_scoopProbe;
+    // What the cache summary reports about probe reuse on this launch.
+    QString m_probeNote;
 
     Queue m_queue;
     Plan m_reviewPlan;
@@ -406,11 +532,29 @@ private:
     bool m_elevated = false;
     QString m_searchText;
     QString m_copyNotice;
+    std::function<void(const QString&, std::function<void(bool, const QString&)>)> m_clipboardWriter;
+    // Why a scan was skipped (a scan that needs administrator rights, for
+    // example). Empty when there is nothing to explain.
+    QString m_scanPolicyNote;
     QString m_statusLine;
     QString m_statePane;
     QString m_stateWhy;
     QString m_blockedReason;
     bool m_busy = false;
+    // The query a running scan is on, for the status bar. Touched only on the
+    // GUI thread: the worker posts stage changes through
+    // QMetaObject::invokeMethod, the same marshal-back pattern as every other
+    // piece of scan state (a direct QString assignment from the worker would
+    // be a data race).
+    QString m_scanStage;
+    // The selection (checked rows and the selected row), captured by exact id
+    // before a refresh replaces the rows and restored after, so a rescan no
+    // longer throws the user back to the top.
+    std::vector<std::string> m_checkedIdsBeforeRefresh;
+    std::string m_selectedIdBeforeRefresh;
+    // The `winget show` cache. Only touched on the GUI thread; the worker
+    // posts fetched fields back through the marshal pattern.
+    info_cache::Store m_infoStore;
     // Development harness only: when true, no backend process is started at all,
     // so the window is fully determined by the injected snapshot.
     bool m_fakeMode = false;
@@ -423,6 +567,13 @@ private:
     QString m_reviewAction;
     QVariantList m_reviewActions;
     QVariantMap m_reviewFacts;
+    // The review batch: one checked package and plan per row, in checked
+    // order. A blocked row keeps its plan with its blocker and is excluded
+    // from the confirm; the design forbids a batch from implicitly covering a
+    // row the user has not seen.
+    std::vector<Package> m_reviewBatch;
+    std::vector<Plan> m_reviewPlans;
+    QVariantList m_reviewRows;
     // What the review page was opened on, so switching the action can recompute
     // the plan without re-reading the model.
     Package m_reviewPackage;

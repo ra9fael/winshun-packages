@@ -30,6 +30,7 @@
 #include <deque>
 #include <functional>
 #include <map>
+#include <unordered_map>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -834,6 +835,7 @@ inline int onceEffects(const Effects& effects)
 
 class Plugin {
 public:
+    using ToolCallback = std::function<void(Json)>;
     virtual ~Plugin() = default;
 
     // The protocol loop: reads requests until stdin closes or shutdown
@@ -845,10 +847,16 @@ public:
             if (!m_queued.empty()) {
                 line = std::move(m_queued.front());
                 m_queued.pop_front();
-            } else if (!m_reader.next(line))
+            } else if (!m_reader.next(line)) {
+                failPendingTools();
                 return 0;
-            if (handle(line))
+            }
+            if (handleToolResponse(line))
+                continue;
+            if (handle(line)) {
+                failPendingTools();
                 return 0;
+            }
         }
     }
     // The same over the given ends instead of stdin and stdout (a plugin
@@ -914,7 +922,7 @@ public:
     // Only from the thread in serve() (it reads the answer itself).
     Json tool(const std::string& name, Json arguments)
     {
-        const long long id = m_nextId++;
+        const long long id = nextToolId();
         send(Json::Object {{"id", id}, {"method", "winshun/tool"}, {"params", Json::Object {{"name", name}, {"arguments", std::move(arguments)}}}});
         std::string line;
         while (m_reader.next(line)) {
@@ -924,6 +932,20 @@ public:
             m_queued.push_back(line);
         }
         return Json(Json::Object {{"error", Json::Object {{"code", -32000}, {"message", "Win顺 went away"}}}});
+    }
+
+    // Starts a host tool call without blocking the protocol loop. The callback
+    // runs on the protocol thread and receives either the result object or an
+    // object containing "error".
+    void toolAsync(const std::string& name, Json arguments, ToolCallback callback)
+    {
+        const long long id = nextToolId();
+        {
+            const std::lock_guard lock(m_toolMutex);
+            m_toolCallbacks.emplace(id, std::move(callback));
+        }
+        send(Json::Object {{"id", id}, {"method", "winshun/tool"},
+                           {"params", Json::Object {{"name", name}, {"arguments", std::move(arguments)}}}});
     }
 
 protected:
@@ -970,6 +992,47 @@ protected:
     virtual void queryAsync(const Query& q, std::function<void(Json)> reply) { reply(queryResult(q)); }
 
 private:
+    long long nextToolId()
+    {
+        const std::lock_guard lock(m_toolMutex);
+        return m_nextId++;
+    }
+
+    void failPendingTools()
+    {
+        std::unordered_map<long long, ToolCallback> pending;
+        {
+            const std::lock_guard lock(m_toolMutex);
+            pending.swap(m_toolCallbacks);
+        }
+        for (auto& [id, callback] : pending)
+            callback(Json::Object {{"error", Json::Object {{"code", -32000}, {"message", "WinShun disconnected"}}}});
+    }
+
+    bool handleToolResponse(const std::string& line)
+    {
+        const auto message = Json::parse(line);
+        if (!message || !message->isObject() || message->has("method") || !(*message)["id"].isNumber())
+            return false;
+        const long long id = (*message)["id"].toInt();
+        ToolCallback callback;
+        {
+            const std::lock_guard lock(m_toolMutex);
+            auto it = m_toolCallbacks.find(id);
+            if (it == m_toolCallbacks.end())
+                return false;
+            callback = std::move(it->second);
+            m_toolCallbacks.erase(it);
+        }
+        if (message->has("error"))
+            callback(Json::Object {{"error", (*message)["error"]}});
+        else if (message->has("result"))
+            callback((*message)["result"]);
+        else
+            callback(Json::Object {{"error", Json::Object {{"message", "Invalid host tool response"}}}});
+        return true;
+    }
+
     void send(const Json& message)
     {
         Json m = message;
@@ -1100,6 +1163,8 @@ private:
     std::mutex m_sendMutex;
     std::deque<std::string> m_queued; // lines that came while a tool call waited
     long long m_nextId = 1;
+    std::mutex m_toolMutex;
+    std::unordered_map<long long, ToolCallback> m_toolCallbacks;
     Json m_settings;
     std::string m_locale = "zh";
     std::string m_theme = "light";

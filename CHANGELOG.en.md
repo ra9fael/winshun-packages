@@ -4,6 +4,60 @@
 
 All notable changes are recorded here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.12] - 2026-11-15
+
+### Added
+
+- **Pin list persisted (`pins.json`)**: `winget pin list` ran once per refresh and once per new plugin process, though only an explicit pin/unpin changes it. It now lives beside the inventory cache and is reused within `refreshMinutes`, invalidated when a task finishes and by "clear cache". Measured: one `pin list` on a cold scan, none on a warm one.
+- **Details pinned to the installed version**: an entry records the version the package had when fetched. While that version is still installed the metadata stays valid instead of expiring after 30 minutes; rows that are not installed keep the time-based TTL. Measured: with the entry aged three hours, selecting the same row no longer ran `winget show`.
+- **Per-backend freshness**: `cache.json` now carries `wingetAt` / `scoopAt` and each backend is judged on its own, so only the stale one is queried. Measured: with `scoopAt` aged three hours and `wingetAt` current, opening the window re-queried Scoop only and skipped the WinGet list plus `--upgrade-available`. A finished task still forces both, because what changed on disk cannot be attributed to one backend. Cache files from older builds fall back to the whole-snapshot time.
+
+## [0.4.11] - 2026-11-15
+
+### Added
+
+- **Persisted backend probe verdict**: the two WinGet probe processes (`--version`, `--help`, ~254 ms) and Scoop's PowerShell probe are now recorded in `<data dir>\probe.json` together with a fingerprint of the executable that answered (size + last write time). A later launch reuses the verdict only when it is the same unchanged file and the earlier answer was Ready/Unsupported; a different path, a newer build, or a previous refusal probes for real, so a WinGet update re-evaluates automatically. An explicit Refresh and "Clear cache" invalidate the verdict. The settings popup reports `Probe: reused from disk (…)` or `Probe: re-checking on this launch`.
+
+## [0.4.10] - 2026-11-15
+
+### Added
+
+- **Discover search cache**: repeating a query (case and extra whitespace ignored) within `refreshMinutes` reads `<data dir>\search\<hash>.json` instead of spawning `winget search` and `scoop search` again. One file per query, at most 60 entries evicted oldest-first; an empty result is a valid answer, while a failed scan is never cached. Any install/upgrade/uninstall/reinstall task clears the cache, so a package that was just installed cannot still be offered as installable. The cache summary in the settings popup now reports the search-cache entry count.
+
+## [0.4.3] - 2026-11-14
+
+### Added
+
+- **Batch review for multi-select**: checking several rows and opening 审阅所选操作… now opens a batch review — the action selector lists the union over the checked rows ("N rows have updates and can be upgraded together"), and each row shows its own exact id, installed → target, method and policy. **A row that cannot take the chosen action stays visible with its reason (orange border) and is excluded from the confirm instead of being dropped silently** (unknown targets and held/pinned rows keep their per-item manual review, per PKG-F10/F11). Confirming enqueues one task per runnable row: each is an independently authorised task with its own agreement snapshot, the per-manager serial lanes and the per-task post-run verification. The single-row review renders exactly as before.
+- **Cache invalidation that actually follows mutations**: finishing a task (install/upgrade/uninstall/reinstall) drops that package's cached metadata immediately (the old version and installer hash are no longer shown), and a finished refresh drops entries for packages no longer installed. 刷新 itself always force-rescans the backends; the settings popup's Clear cache wipes everything.
+
+### Fixed
+
+- **Task logs are no longer truncated**: logs were cut three times over — multi-line output collapsed to the first line plus "[truncated N further lines]" (redactBlock kept one line), single lines capped at 512 characters (the command line was cut mid-argument), and the captured output reduced to a 600-character tail. The full output is kept now: generous bounds of 2000 lines and 4000 characters per line, with redaction (paths, ANSI escapes, likely tokens) unchanged; the command line and winget's complete answer are both in the log.
+- **The uninstall verification was graded backwards**: the check passed when the package was still listed, so a clean uninstall (the package gone) was marked failed and a failed uninstall (the package still there) was marked succeeded. The uninstall verdict now keys on the package being gone.
+- **A post-upgrade verification that cannot see the package is no longer a false failure**: winget's filtered list can keep missing a freshly installed package while the installer's bookkeeping settles (observed on Zellij and DeepSeek Harness — absent through a 6-second retry window, present minutes later). A not-found verification now retries on a 2s/5s/12s schedule, four checks over roughly twenty seconds; when it still finds nothing, the task enters **Needs review (state unknown)** instead of "failed" — a clean run whose verification cannot answer is a different conclusion, and the inventory rescan after the queue drains shows the real state either way. When the verification output is refused (an error message, a source prompt), what winget actually said rides in the log.
+
+## [0.4.2] - 2026-11-14
+
+### Added
+
+- **A real settings popup**: 「设置」now has four sections — the current values of the four host-managed settings (with a pointer to the plugin card, the only editor), cache management (data-folder path, inventory and info cache sizes with scan time, a Clear cache button), backend state, and the scope statement. Changes pushed via `settingsChanged` show up at once.
+- **A fetch-info-on-selection switch (`autoFetchInfo`, on by default)**: on, selecting a WinGet row runs `winget show` in the background (the 0.3.0 behaviour); off, only the More and Project page buttons query. The switch applies at once.
+- **A metadata cache (`info.json`)**: `winget show` answers are cached by exact id (compared case-insensitively) in the plugin's data folder — atomic write, the same `refreshMinutes` expiry as the inventory cache, 200 entries LRU-capped; failures and empty results are never cached and re-query. Returning to a cached row no longer waits seconds for a subprocess.
+- **Refresh progress**: a spinning arc beside the refresh button, and the status bar names the stage ("WinGet installed list → WinGet update list → Scoop…") instead of one word of "Querying…" over a tens-of-seconds scan.
+
+### Fixed
+
+- **A refresh no longer throws the selection back to the top**: after a scan replaces every row, the selected row and the checked ones are restored by exact id (case-insensitively — backends recase ids between scans); the details pane's highlight follows the model selection, so the restored selection is visible, not just present.
+
+## [0.4.1] - 2026-11-14
+
+### Fixed
+
+- **Pre-release versions reported "target version cannot be compared"**: a pre-release bump on the same baseline such as `0.2.2-rc.2 → 0.2.2-rc.3` (DeepSeek Harness, observed here) was treated as unorderable and the upgrade was not offered. Suffixes now follow the SemVer §11 pre-release identifier rules: numeric identifiers compare numerically (rc.2 < rc.3 < rc.10), alphanumeric ones in ASCII order (alpha < beta), a shorter identifier set sorts below a longer one (alpha < alpha.1), and a numeric identifier sorts below an alphanumeric one at the same position (§11.4); `+build` metadata is ignored (§10). A malformed identifier (`alpha..b`) stays unorderable rather than guessed.
+- **Verification occasionally reported "package not found" after an upgrade**: a Zellij upgrade ended with winget exit 0 and the package genuinely installed, but the uninstall/reinstall cycle left the registry entry re-registered a few seconds late, so a single early verification read "not found" and graded the run as failed. A not-found verification now waits 2 seconds and retries, up to three checks; a retry hit is noted in the log.
+- **Carried from the previous build**: 0.4.0's memoryMB 256 → 512 (the Qt glyph atlas hit `qBadAlloc` against the 256 MB job cap, see the 0.4.0 entry) ships with this version.
+
 ## [0.4.0] - 2026-11-14
 
 ### Added
@@ -14,6 +68,7 @@ All notable changes are recorded here. Format follows [Keep a Changelog](https:/
 ### Fixed
 
 - **Interactive upgrade crashes and uninstaller waits (including Pandoc)**: WinGet mutations preserve interactive installer UI; agreement snapshots belong to each task; the controller owns and safely joins workers to prevent callbacks from touching destroyed objects.
+- **The "random" crash when selecting a row or upgrading**: four crash dumps share one stack — the Qt Quick scene-graph thread throws `qBadAlloc` while growing the distance-field glyph atlas, then `std::terminate` → `abort()` follows (the FAST_FAIL_FATAL_APP_EXIT behind exit code 0xC0000409). The job's 256 MB memory cap is not enough for a 375-package list heavy in mixed CJK/Latin text plus an icon font; `memoryMB` is now 512. The crash lands on the frame where a new screenful of glyphs first enters the atlas, regardless of which row was clicked, which is why it looked random.
 - **Clipped detail pane**: bind the information card to its parent width and clear detail state when selection resets.
 
 ## [0.3.0] - 2026-11-14

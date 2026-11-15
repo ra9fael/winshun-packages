@@ -137,11 +137,70 @@ void elevationIsReported()
     CHECK(pkg::platform::isElevated() == elevated);
 }
 
+// A supplied environment must be a COMPLETE block with the overrides applied.
+// The regression this guards: the block contained only the overrides, so a
+// child started with no PATH/SystemRoot, and CreateProcess rejected some of them.
+void environmentOverrideApplies()
+{
+    section("environment overrides keep the rest of the block");
+    if (comspec().empty()) {
+        std::printf("skip: no ComSpec\n");
+        return;
+    }
+    auto options = shell("echo UP=%USERPROFILE%& echo PATHLEN=%PATH:~0,3%");
+    options.environment.emplace_back("USERPROFILE", "C:\\Users\\Probe");
+    const auto result = pkg::platform::run(options);
+    CHECK(result.launched);
+    CHECK(result.exitCode == 0);
+    CHECK(result.output.find("UP=C:\\Users\\Probe") != std::string::npos);
+    // A child with only USERPROFILE would have no PATH at all.
+    CHECK(result.output.find("PATHLEN=C:") != std::string::npos);
+}
+
+// A launch failure is recorded with the facts that are not visible in the
+// plugin's one-line status (path used, Win32 error, profile variables).
+void launchFailureIsRecorded()
+{
+    section("a launch failure is recorded for diagnosis");
+    pkg::platform::RunOptions options;
+    options.application = "definitely-not-a-real-program-xyz.exe";
+    options.timeoutMs = 5000;
+    const auto result = pkg::platform::run(options);
+    CHECK(!result.launched);
+    CHECK(result.launchError != 0);
+    const std::string path = pkg::platform::pluginDataDir() + "\\launch-failures.log";
+    HANDLE file = ::CreateFileW(pkg::platform::toWide(path).c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
+                                OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    CHECK(file != INVALID_HANDLE_VALUE);
+    if (file == INVALID_HANDLE_VALUE)
+        return;
+    char buffer[4096] = {};
+    DWORD read = 0;
+    ::ReadFile(file, buffer, sizeof buffer - 1, &read, nullptr);
+    ::CloseHandle(file);
+    const std::string text(buffer, read);
+    CHECK(text.find("definitely-not-a-real-program-xyz.exe") != std::string::npos);
+    CHECK(text.find("USERPROFILE=") != std::string::npos);
+}
+
 } // namespace
 
 int main()
 {
     std::printf("ra9fael.packages L2 process tests\n");
+
+    // These tests start children that fail on purpose, and the launch-failure
+    // record goes to pluginDataDir(). Point that at a scratch folder: writing it
+    // into the user's real plugin data folder put test noise next to real
+    // diagnostics.
+    wchar_t temp[MAX_PATH] = {};
+    std::wstring scratch;
+    if (const DWORD length = ::GetTempPathW(MAX_PATH, temp); length > 0 && length < MAX_PATH) {
+        scratch = std::wstring(temp, length) + L"ra9fael.packages.process-tests";
+        ::CreateDirectoryW(scratch.c_str(), nullptr);
+        ::SetEnvironmentVariableW(L"PACKAGES_DEV_DATA_DIR", scratch.c_str());
+    }
+
     fastExitOutput();
     noTrailingNewline();
     nonZeroExit();
@@ -149,6 +208,11 @@ int main()
     cancelIsNotRollback();
     timeoutIsNotSuccess();
     elevationIsReported();
+    environmentOverrideApplies();
+    launchFailureIsRecorded();
+
+    if (!scratch.empty())
+        ::DeleteFileW((scratch + L"\\launch-failures.log").c_str());
 
     std::printf("\n%d checks, %d failure(s)\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;

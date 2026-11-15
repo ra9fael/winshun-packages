@@ -313,7 +313,9 @@ Rectangle {
                     // No reliable total exists, so an indeterminate bar is shown
                     // instead of a fabricated percentage.
                     Rectangle {
-                        Layout.preferredWidth: 90
+                        Layout.fillWidth: true
+                        Layout.minimumWidth: 90
+                        Layout.maximumWidth: 10000
                         implicitHeight: 3
                         radius: 2
                         color: theme.tagFill
@@ -334,7 +336,8 @@ Rectangle {
                     Text {
                         Layout.fillWidth: true
                         visible: stage !== ""
-                        text: root.t("阶段：", "Stage: ") + stage
+                        text: state === "succeeded" ? root.t("阶段：已完成", "Stage: completed")
+                                                   : root.t("阶段：", "Stage: ") + stage
                         color: theme.faint
                         font.family: theme.monoFamily
                         font.pixelSize: theme.tinyFont
@@ -346,10 +349,16 @@ Rectangle {
                     // no phase yet and shows none, which is honest: it is not in
                     // acquire, it is waiting for its lane.
                     RowLayout {
+                        Layout.fillWidth: true
                         spacing: 4
                         visible: stage !== ""
                         Repeater {
-                            model: ["acquire", "install", "verify"]
+                            id: phaseRepeater
+                            model: action === root.t("卸载", "Uninstall")
+                                    ? ["uninstall", "verify"]
+                                    : action === root.t("升级", "Upgrade")
+                                      ? ["upgrade", "verify"]
+                                      : ["acquire", "install", "verify"]
                             delegate: RowLayout {
                                 required property int index
                                 required property string modelData
@@ -361,7 +370,9 @@ Rectangle {
                                     color: "transparent"
                                     border.width: 1
                                     border.color: {
-                                        const current = stage.indexOf(modelData) === 0
+                                         if (state === "succeeded")
+                                             return theme.ok
+                                         const current = stage.indexOf(modelData) === 0
                                         if (current)
                                             return theme.accentLine
                                         return index === 0 && stage !== "" ? theme.ok : theme.controlBorder
@@ -371,7 +382,9 @@ Rectangle {
                                         anchors.centerIn: parent
                                         text: modelData
                                         color: {
-                                            const current = stage.indexOf(modelData) === 0
+                                             if (state === "succeeded")
+                                                 return theme.ok
+                                             const current = stage.indexOf(modelData) === 0
                                             if (current)
                                                 return theme.accentLine
                                             return theme.faint
@@ -381,12 +394,18 @@ Rectangle {
                                     }
                                 }
                                 Text {
-                                    visible: index < 2
+                                    visible: index < phaseRepeater.count - 1
                                     text: "›"
                                     color: theme.faint
                                     font.pixelSize: theme.tinyFont
                                 }
                             }
+                        }
+                        Text {
+                            visible: state === "succeeded"
+                            text: root.t("✓ 已完成", "✓ Completed")
+                            color: theme.ok
+                            font.pixelSize: theme.tinyFont
                         }
                     }
 

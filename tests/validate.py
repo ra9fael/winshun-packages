@@ -51,14 +51,15 @@ def check_manifest(quick: bool) -> dict:
     if runtime.get("qt") and not runtime.get("qtVersion"):
         problems.append("qt requires qtVersion")
     # `runtime.elevated` is a different field (an old shape) and stays forbidden;
-    # the `elevated` PERMISSION is what wifi and this plugin use to follow the
-    # host's administrator state, so it is expected here.
+    # This plugin must stay in the user's ordinary execution context.
     if runtime.get("elevated"):
         problems.append("this plugin must not set runtime.elevated")
 
     perms = m.get("permissions", [])
-    if "elevated" not in perms:
-        problems.append("elevated must be declared: machine-scope actions need it")
+    if "elevated" in perms:
+        problems.append("packages must not inherit the host's administrator token")
+    if "clipboard:write" not in perms:
+        problems.append("clipboard_copy requires clipboard:write")
     if "ui" not in perms or "processes" not in perms:
         problems.append("ui and processes are required for this plugin")
 
