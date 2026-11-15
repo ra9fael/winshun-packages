@@ -1,16 +1,53 @@
-# Win顺 Packages（需求草案）
+# Win顺 Packages
 
 [English](README.en.md) · [设计](plugin-design.md) · [界面规格](UI-SPEC.md) · [测试计划](TEST-PLAN.md)
 
-`ra9fael.packages` 拟提供 Scoop / WinGet 一站式软件包查询、安装、卸载、重装和升级界面。当前仅需求阶段：没有插件实现、清单、脚本、配置、构建产物或可用安装包。本文中的行为都是拟议验收要求，不能当作已提供的功能。
+`ra9fael.packages` 是 Win顺 的软件包管理插件：在一个窗口里查看、安装、卸载、重装和升级 Scoop 与 WinGet 软件包。当前版本 **0.4.12**。
 
-## 范围与入口
+插件以**普通用户权限**运行（清单不含 `elevated`），查询只产生结果，任何变更都要先选中精确身份、审阅计划、显式确认后入队执行。WinGet／安装器需要管理员权限时由它们自己请求 UAC；插件不自行提权、降权或换权限重试。
+
+## 已实现
+
+- **已安装**：WinGet / Scoop 两个来源合并展示，同名不合并；区分后端记录项与被枚举项（ARP/MSIX）；可本地筛选。
+- **发现**：异步搜索，丢弃迟到结果；搜索结果作用域未知时进入审阅后必须先选「当前用户 / 所有用户」，否则不能确认。
+- **更新**：按后端证据列出目标版本，尊重 `winget pin list` 的 pin/hold。
+- **任务**：每个变更独立授权；按管理器串行；阶段显示 `install/uninstall › verify`，结束后核对状态而不是只看退出码；失败、部分成功、结果未知分别呈现。
+- **诊断**：完整命令行与后端输出写入任务日志（脱敏路径与令牌）；`0x8A15007D`（管理员进程处理用户作用域包）、`0x87AF0008`（WinGet 用户数据库不可写）都有明确说明。
+- **缓存**：清单、更新、搜索结果、包详情、pin 列表、后端探针结论分别落盘，按 `refreshMinutes` 与各自失效条件复用；任一后端故障时只重查该后端。
+
+## 权限
+
+| 权限 | 用途 |
+|---|---|
+| `ui` | 插件窗口、主题与语言 |
+| `processes` | 调用 `winget` / `scoop`（PowerShell）并读取其输出 |
+| `network` | 由 WinGet／Scoop 自身下载软件包与源数据；插件不发起额外网络请求 |
+| `clipboard:write` | 通过宿主 `clipboard_copy` 复制包 ID、日志、路径 |
+| `files:read` / `files:write` | 只读写插件自己的数据目录（`%LOCALAPPDATA%\WinShun\plugins\ra9fael.packages.data`）保存缓存 |
+
+## 构建与发布
+
+需要 Windows x64、MSVC 与 Qt 6.12（使用宿主共享 Qt，插件不打包 Qt DLL）：
+
+```powershell
+cmake -S . -B build\dev2
+cmake --build build\dev2 --target packages
+python tools\package.py --out dist\release-0.4.12   # 生成 <id>-<version>.wsplugin
+```
+
+正式包以 `<id>-<version>.wsplugin` 命名，附在对应 tag 的 GitHub Release 上；插件库条目由 `WinShun-plugins` 仓库的 `tools/entry.py` 从该附件生成。本插件是 C++ + 宿主共享 Qt，构建在本地以固定提交完成，不使用只打包脚本的通用发布工作流。
+
+## 验收需求（规格附录）
+
+以下 PKG-Fxx 是最初的需求与验收条目，仍然作为行为规范；实现进度以「已实现」一节和 [更改日志](CHANGELOG.md) 为准。
+
+### 范围与入口
 
 拟从 Win顺 关键词 `packages` 打开独立窗口，默认进入 Installed。主导航为 Installed / Discover / Updates / Tasks，可筛选 All / Scoop / WinGet。查询只产生结果；安装等变更必须选择明确包、查看刷新后的计划、确认并进入队列。缺一个管理器时仍可使用另一个；不自动安装管理器、PowerShell 模块或其他可选依赖。
 
 P0 优先完成正常用户权限下的 installed / search / details / update-list，以及 selected install / uninstall / reinstall / upgrade 和任务队列。P1 包含 source / bucket 只读诊断、失败恢复辅助及显式元数据维护入口；P2 才考虑 source / bucket / pin / hold 的完整增删改管理。P0 必须读出并尊重已有 pin / hold，不能以“后续支持管理”为由忽略它们。P0 不提供隐含 upgrade-all、跨管理器迁移、自动修复、自动同意协议、默认 purge 或自动权限提升。
 
-## 稳定功能需求
+### 功能条目
 
 PKG-Fxx 是 FR 标识。优先级不改变安全约束；后续拆分时保留原 ID，以新增 ID 扩展。下列 30 项由 [测试计划](TEST-PLAN.md) 逐项追踪。
 
