@@ -15,6 +15,36 @@
 - **诊断**：完整命令行与后端输出写入任务日志（脱敏路径与令牌）；`0x8A15007D`（管理员进程处理用户作用域包）、`0x87AF0008`（WinGet 用户数据库不可写）都有明确说明。
 - **缓存**：清单、更新、搜索结果、包详情、pin 列表、后端探针结论分别落盘，按 `refreshMinutes` 与各自失效条件复用；任一后端故障时只重查该后端。
 
+## 截图
+
+<details>
+<summary>已安装列表</summary>
+
+<img width="982" height="586" alt="installed" src="https://github.com/user-attachments/assets/410d0cd2-9877-4735-a0fe-d23d0c1900dc" />
+
+</details>
+
+<details>
+<summary>发现页搜索</summary>
+
+<img width="982" height="586" alt="search" src="https://github.com/user-attachments/assets/19829160-3ff9-4c17-af59-18fdf1a6a4e9" />
+
+</details>
+
+<details>
+<summary>更新列表</summary>
+
+<img width="982" height="586" alt="update" src="https://github.com/user-attachments/assets/65bbe915-965c-450c-a15d-d91ef542ee26" />
+
+</details>
+
+<details>
+<summary>安装审阅</summary>
+
+<img width="982" height="586" alt="Request" src="https://github.com/user-attachments/assets/c309867c-4959-46fa-8a73-17dc87596f11" />
+
+</details>
+
 ## 权限
 
 | 权限 | 用途 |

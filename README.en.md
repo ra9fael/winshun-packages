@@ -15,6 +15,36 @@ It runs with **ordinary user rights** (no `elevated` permission). Queries only r
 - **Diagnostics**: full command line and backend output in the task log (paths and tokens redacted); `0x8A15007D` (elevated process, user-scope package) and `0x87AF0008` (WinGet user database not writable) get explicit explanations.
 - **Caches**: inventory, updates, search results, package details, pin list and probe verdict are cached separately on disk and reused under `refreshMinutes` with their own invalidation rules; a failing backend does not force a rescan of the other.
 
+## Screenshots
+
+<details>
+<summary>Installed</summary>
+
+<img width="982" height="586" alt="installed" src="https://github.com/user-attachments/assets/410d0cd2-9877-4735-a0fe-d23d0c1900dc" />
+
+</details>
+
+<details>
+<summary>Discover search</summary>
+
+<img width="982" height="586" alt="search" src="https://github.com/user-attachments/assets/19829160-3ff9-4c17-af59-18fdf1a6a4e9" />
+
+</details>
+
+<details>
+<summary>Updates</summary>
+
+<img width="982" height="586" alt="update" src="https://github.com/user-attachments/assets/65bbe915-965c-450c-a15d-d91ef542ee26" />
+
+</details>
+
+<details>
+<summary>Install review</summary>
+
+<img width="982" height="586" alt="Request" src="https://github.com/user-attachments/assets/c309867c-4959-46fa-8a73-17dc87596f11" />
+
+</details>
+
 ## Permissions
 
 | Permission | Purpose |
