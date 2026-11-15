@@ -1,4 +1,4 @@
-# run-dev.ps1 — build and open the development harness.
+﻿# run-dev.ps1 — build and open the development harness.
 #
 # The plugin is a resident process driven by WinShun over stdio, so every check
 # otherwise costs a build, a package, an install and a host restart. The harness

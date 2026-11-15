@@ -4,6 +4,12 @@
 
 所有显著更改都记录在本文件中。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.4.13] - 2026-11-15
+
+### Fixed
+
+- **三个 PowerShell 脚本改为带 BOM 的 UTF-8**（`check-layout.ps1`、`run-dev.ps1`、`tools/capture_fixtures.ps1`）。它们会被打进发布包，而插件库要求 `.ps1` 使用带 BOM 的 UTF-8，否则 Windows PowerShell 5.1 里的中文会乱码；此前收录检查因此失败。脚本内容未变。
+
 ## [0.4.12] - 2026-11-15
 
 ### Added

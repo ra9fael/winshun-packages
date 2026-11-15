@@ -1,4 +1,4 @@
-# capture_fixtures.ps1 — re-capture the WinGet/Scoop output fixtures.
+﻿# capture_fixtures.ps1 — re-capture the WinGet/Scoop output fixtures.
 #
 # These fixtures are evidence of OUTPUT SHAPE only. Capturing them proves nothing
 # about install/uninstall behaviour, and a passing parse only proves the parser

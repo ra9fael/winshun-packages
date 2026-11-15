@@ -4,6 +4,12 @@
 
 All notable changes are recorded here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.13] - 2026-11-15
+
+### Fixed
+
+- **The three PowerShell scripts are now UTF-8 with BOM** (`check-layout.ps1`, `run-dev.ps1`, `tools/capture_fixtures.ps1`). They are shipped inside the release package, and the plugin registry requires BOM-prefixed UTF-8 for `.ps1` files so Windows PowerShell 5.1 does not garble non-ASCII text; the entry check failed on this. Script contents are unchanged.
+
 ## [0.4.12] - 2026-11-15
 
 ### Added

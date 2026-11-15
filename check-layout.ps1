@@ -1,4 +1,4 @@
-# check-layout.ps1 — one command that lints every page the plugin can show.
+﻿# check-layout.ps1 — one command that lints every page the plugin can show.
 #
 # The layout regressions this has caught (a 137 px gap from RowLayout
 # mis-measuring, an unpainted SplitView, unthemed controls) share one property:
