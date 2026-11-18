@@ -24,6 +24,9 @@
 - 查询线程 = 每次刷新起一个 detached worker（`startBackendRefresh`），内部再按 backend 分两条线程并行（WinGet 已安装+更新 / Scoop 已安装），结果经队列投递回 GUI；`m_refreshInFlight` 防重入。
 - 执行线程 = `drainQueue` 挑出可运行任务后在 detached worker 上跑 `runOneTask`，逐阶段 `platform::run`；`logLine` 跨线程时重投回 GUI 线程再写队列，`m_runCancel` 由执行器与 `run()` 共同轮询。
 - 搜索线程 = 发现页搜索单飞行，结果过期即丢弃。
+- 设置同步 = QML 在 GUI 线程调用 Controller 单项更新；Controller 将单键 map 交给 SDK 的 `updateSettings()` 发协议通知，宿主持久化后通过 `settingsChanged` 回推完整合并值。宿主下发只应用，不回发。
+
+窗口设置弹层编辑 manifest 中的七项宿主偏好。缓存仍写入插件数据目录；`refreshMinutes` 为 0 时缓存始终过期。搜索结果动作分别映射默认、无扫描、强制刷新及无扫描设置入口。插件 `scanOnStartup` 是插件被 lazy 启动后执行一次后台扫描，不表示 Win顺 启动时预加载插件。
 
 ## 安全边界（实现位置）
 

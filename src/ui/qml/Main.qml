@@ -19,7 +19,8 @@ ApplicationWindow {
     title: qsTr("软件包")
     flags: Qt.Window | Qt.WindowTitleHint | Qt.WindowSystemMenuHint | Qt.WindowCloseButtonHint
 
-    readonly property bool zh: controller.locale.startsWith("zh")
+    readonly property bool zh: controller.settings.uiLanguage === "zh-CN"
+                                || (controller.settings.uiLanguage !== "en-US" && controller.locale.startsWith("zh"))
     function t(zhText, enText) { return zh ? zhText : enText }
 
     // Which tabs are searchable. Installed needs it for a machine with hundreds of
@@ -971,6 +972,7 @@ ApplicationWindow {
         id: settingsPopup
         objectName: "settingsPopup"
         anchors.centerIn: parent
+        function showSettings() { settingsPopup.open() }
         width: 460
         height: Math.min(window.height - 40, 610)
         modal: true
@@ -999,39 +1001,97 @@ ApplicationWindow {
             spacing: 8
 
             Text {
-                text: window.t("设置", "Settings")
-                color: theme.text
-                font.family: theme.fontFamily
-                font.pixelSize: theme.baseFont
-                font.weight: Font.DemiBold
-            }
-
-            // ---- current settings ------------------------------------------
-            // Settings remain host-owned. Values arriving through settingsChanged
-            // are reflected immediately and are never shadowed by local state.
-            Text {
-                text: window.t("当前设置", "Current settings")
+                text: window.t("偏好", "Preferences")
                 color: theme.subtext
                 font.family: theme.fontFamily
                 font.pixelSize: theme.smallFont
                 font.weight: Font.DemiBold
             }
-            Text {
+            RowLayout {
                 Layout.fillWidth: true
-                text: controller.settingsSummary
-                color: theme.text
-                font.family: theme.fontFamily
-                font.pixelSize: theme.metaFont
-                wrapMode: Text.WrapAnywhere
+                Text {
+                    Layout.fillWidth: true
+                    Layout.minimumWidth: 0
+                    text: window.t("界面语言", "UI language")
+                    color: theme.text
+                    font.pixelSize: theme.metaFont
+                    wrapMode: Text.WordWrap
+                }
+                ComboBox {
+                    Layout.maximumWidth: 190
+                    model: [window.t("跟随 Win顺", "Follow WinShun"), window.t("简体中文", "Chinese"), "English"]
+                    currentIndex: controller.settings.uiLanguage === "zh-CN" ? 1 : controller.settings.uiLanguage === "en-US" ? 2 : 0
+                    onActivated: controller.updateSetting("uiLanguage", ["auto", "zh-CN", "en-US"][currentIndex])
+                }
+            }
+            ThemedCheckBox {
+                Layout.fillWidth: true
+                text: window.t("显示仅被枚举的项", "Show observed-only rows")
+                checked: controller.settings.showObserved
+                onClicked: controller.updateSetting("showObserved", checked)
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                Text {
+                    Layout.fillWidth: true
+                    Layout.minimumWidth: 0
+                    text: window.t("缓存刷新间隔（分钟）", "Cache refresh interval (minutes)")
+                    color: theme.text
+                    font.pixelSize: theme.metaFont
+                    wrapMode: Text.WordWrap
+                }
+                SpinBox {
+                    Layout.maximumWidth: 150
+                    from: 0
+                    to: 1440
+                    editable: true
+                    value: controller.settings.refreshMinutes
+                    onValueModified: controller.updateSetting("refreshMinutes", value)
+                }
             }
             Text {
                 Layout.fillWidth: true
                 wrapMode: Text.WordWrap
-                text: window.t("修改请到 Win顺 的「设置 → 插件 → 软件包」卡片；改动即时生效，无需重启。",
-                               "Edit them on the Packages card under WinShun's Settings → Plugins; changes apply at once, no restart.")
+                text: window.t("0 表示缓存始终视为过期；插件启动扫描只在插件按需启动时运行，不代表 Win顺 启动时预加载。",
+                               "0 keeps the cache perpetually stale. Startup scan runs when this lazy plugin starts; it does not preload the plugin when WinShun starts.")
                 color: theme.faint
                 font.family: theme.fontFamily
                 font.pixelSize: theme.tinyFont
+            }
+            ThemedCheckBox {
+                Layout.fillWidth: true
+                text: window.t("选中后自动获取包信息", "Fetch package info on selection")
+                checked: controller.settings.autoFetchInfo
+                onClicked: controller.updateSetting("autoFetchInfo", checked)
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                Text {
+                    Layout.fillWidth: true
+                    Layout.minimumWidth: 0
+                    text: window.t("打开时扫描", "Scan on open")
+                    color: theme.text
+                    font.pixelSize: theme.metaFont
+                    wrapMode: Text.WordWrap
+                }
+                ComboBox {
+                    Layout.maximumWidth: 190
+                    model: [window.t("缓存过期时", "When stale"), window.t("每次打开", "Every time"), window.t("从不", "Never")]
+                    currentIndex: controller.settings.scanOnOpen === "always" ? 1 : controller.settings.scanOnOpen === "never" ? 2 : 0
+                    onActivated: controller.updateSetting("scanOnOpen", ["stale", "always", "never"][currentIndex])
+                }
+            }
+            ThemedCheckBox {
+                Layout.fillWidth: true
+                text: window.t("插件启动时后台扫描", "Scan in background when plugin starts")
+                checked: controller.settings.scanOnStartup
+                onClicked: controller.updateSetting("scanOnStartup", checked)
+            }
+            ThemedCheckBox {
+                Layout.fillWidth: true
+                text: window.t("记录详细诊断", "Detailed diagnostics")
+                checked: controller.settings.debugLogging
+                onClicked: controller.updateSetting("debugLogging", checked)
             }
 
             Rectangle { Layout.fillWidth: true; height: 1; color: theme.divider }

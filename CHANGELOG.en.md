@@ -4,6 +4,23 @@
 
 All notable changes are recorded here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.14] - 2026-11-18
+
+### Added
+
+- **Editable settings popup**: the window's settings popup is no longer a read-only summary. All seven host preferences (UI language, show observed-only rows, cache refresh interval, fetch package info on selection, scan when the window opens, scan when the plugin starts, detailed diagnostics) are edited in place and submitted to the host one at a time. Changing one leaves the other six intact, and settings pushed by the host are applied without being echoed back. The refresh interval is bounded to 0–1440 minutes; 0 still keeps the cache perpetually stale.
+- **Search result actions**: the `packages` row offers Open, Open cache only, Open and refresh, and Settings, mapped to the existing open policy, a no-scan open, a forced refresh and a no-scan settings entry. Settings and cache-only open never query a backend just because they opened.
+- **Host settings entry**: the manifest declares `settingsWindow` and the plugin implements `showSettings()`, so the host's settings button opens the existing window's settings popup.
+
+### Changed
+
+- **Standalone keyword entries removed**: the `pkgs-only` / `包只读` and `pkgs-refresh` / `包刷新` entries and their keywords are gone; the same capabilities are now result actions on `packages`.
+
+### Fixed
+
+- **English settings labels overflowed**: long labels were clipped in the narrow column and now wrap to the available width.
+- **The resident protocol did not dispatch `showSettings`**: a `showSettings` request from the host never reached the plugin method, so the settings button did nothing. It is dispatched now, with request/reply and hook-call tests.
+
 ## [0.4.13] - 2026-11-15
 
 ### Fixed

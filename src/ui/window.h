@@ -106,11 +106,8 @@ class Controller : public QObject {
     // status bar. A scan takes tens of seconds and touches four queries; one
     // word of "Querying…" made every step of it look stuck.
     Q_PROPERTY(QString scanStage READ scanStage NOTIFY statusChanged)
-    // The plugin's four host-managed settings, as the user set them on the
-    // plugin card, for the window's settings popup. The plugin cannot write
-    // settings back (the SDK has no such channel); the popup shows the values
-    // and points at the card.
-    Q_PROPERTY(QString settingsSummary READ settingsSummary NOTIFY settingsApplied)
+    // Host-managed settings shown and edited in the window.
+    Q_PROPERTY(QVariantMap settings READ settings NOTIFY settingsApplied)
     // Data-folder path, cache file sizes and scan time, for the settings
     // popup's cache section and its "clear cache" button.
     Q_PROPERTY(QString cacheSummary READ cacheSummary NOTIFY statusChanged)
@@ -180,12 +177,15 @@ public:
     // Called from the protocol thread; each marshals to the GUI thread.
     void applyAppearance(const QString& locale, bool dark, const QVariantMap& nativeLook);
     void applySettings(const UiSettings& settings);
+    void setSettingsUpdater(std::function<void(const QVariantMap&)> updater)
+    { m_settingsUpdater = std::move(updater); }
     void setClipboardWriter(std::function<void(const QString&, std::function<void(bool, const QString&)>)> writer)
     { m_clipboardWriter = std::move(writer); }
     // Opens the window. `mode` says how: Default follows the scan policy,
     // NoScan shows the cache without touching a backend, ForceRefresh always
     // re-queries.
     void openWindow(OpenMode mode = OpenMode::Default);
+    void openSettings();
     // The scan the user asked for at startup (settings: scanOnStartup). It runs
     // without opening a window, and it is a no-op unless the plugin is allowed
     // to scan under the current rights.
@@ -241,7 +241,7 @@ public:
     QString selectionSummary() const;
     bool busy() const { return m_busy; }
     QString scanStage() const { return m_scanStage; }
-    QString settingsSummary() const;
+    QVariantMap settings() const;
     QString cacheSummary() const;
     QString dataPath() const;
     QString scanPolicyNote() const { return m_scanPolicyNote; }
@@ -324,6 +324,7 @@ public slots:
     // in-memory snapshots, so the next refresh rebuilds everything from the
     // backends. The settings popup's 缓存 section owns the button.
     Q_INVOKABLE void clearCache();
+    Q_INVOKABLE void updateSetting(const QString& key, const QVariant& value);
     Q_INVOKABLE void copyDataPath();
     Q_INVOKABLE void openDataFolder();
     // Opens the package's project/home page in the default browser. Read-only and
@@ -377,13 +378,13 @@ signals:
     void statePaneChanged();
     void reviewChanged();
     void tasksChanged();
-    // The host-managed settings changed (initialize or settingsChanged), so the
-    // settings popup's summary must re-read.
+    // The host-managed settings changed (initialize or settingsChanged).
     void settingsApplied();
     // A scan was skipped for a reason the user should see (rights, policy).
     void scanPolicyNoteChanged();
     // Emitted when the window should be shown or hidden (GUI thread only).
     void windowShouldShow();
+    void settingsRequested();
     void windowShouldClose();
 
 private:
@@ -579,6 +580,7 @@ private:
     Package m_reviewPackage;
 
     UiSettings m_settings;
+    std::function<void(const QVariantMap&)> m_settingsUpdater;
     bool m_windowOpen = false;
     bool m_refreshInFlight = false;
     // A search is running on the worker thread / a keystroke is waiting for one.

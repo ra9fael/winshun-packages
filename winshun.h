@@ -914,6 +914,12 @@ public:
     // shows it, Win顺 asks again now instead of when `rerun` is up. Call it
     // after the state the next query reads is written. Otherwise nothing.
     void refresh() { notify("winshun/refresh", Json::Object {}); }
+    // Updates values declared in the plugin manifest. Win顺 validates,
+    // persists and sends the merged result back through settingsChanged.
+    void updateSettings(Json values)
+    {
+        notify("winshun/settings/update", Json::Object {{"settings", std::move(values)}});
+    }
     // One of Win顺's tools (the same names and arguments as its MCP tools:
     // search_files, search_content, recent_files, list_folder, get_file_info,
     // open_item, show_in_folder, clipboard_history, clipboard_get,
@@ -959,6 +965,9 @@ protected:
         return {effect::copy(text), effect::notify(chinese() ? "已复制" : "Copied"), effect::hide()};
     }
     virtual void settingsChanged(const Json& settings) { (void)settings; }
+    // The host asks the plugin to open its own settings window. The request is
+    // answered immediately; a plugin may hand window creation to its GUI thread.
+    virtual void showSettings() {}
     // An item made withDetails() shown in the content pane or the preview
     // (GitHub #202): Json::Object {{"text", …}} or {{"file", a file in
     // dataDir()}}. Without it (nullopt): "method not found", and the pane
@@ -1140,6 +1149,10 @@ private:
         } else if (method == "settingsChanged") {
             m_settings = params["settings"];
             settingsChanged(m_settings);
+        } else if (method == "showSettings") {
+            showSettings();
+            if (!id.isNull())
+                answer(Json::Object {});
         } else if (method == "appearance") {
             if (params["locale"].isString())
                 m_locale = params["locale"].toString();

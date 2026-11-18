@@ -45,6 +45,8 @@ pkg::ui::UiSettings readSettings(const winshun::Json& settings)
     const std::string language = text("uiLanguage");
     if (language == "zh-CN" || language == "en-US")
         out.language = language;
+    else
+        out.language = "auto";
     if (settings.has("showObserved"))
         out.showObserved = settings["showObserved"].toBool(true);
     if (settings.has("refreshMinutes"))
@@ -99,15 +101,15 @@ public:
         // The effect only hides the search box. The window itself is created on
         // the GUI thread, so the request is marshalled rather than built here.
         //
-        // The three search entries mean three different things, and the command
-        // id is what tells them apart:
-        //   "packages"          -> follow the scan policy in the settings;
-        //   "packages-open-only"-> show the cache, never query a backend;
-        //   "packages-refresh"  -> always re-query, ignoring the cache's age.
+        // Search actions select the opening mode:
+        //   default/open -> follow the scan policy in the settings;
+        //   open-only   -> show the cache, never query a backend;
+        //   refresh     -> always re-query, ignoring the cache's age.
         pkg::ui::OpenMode mode = pkg::ui::OpenMode::Default;
-        if (request.command == "packages-open-only")
+        const bool settingsAction = request.action == "settings" || request.command == "packages-settings";
+        if (request.action == "open-only" || settingsAction)
             mode = pkg::ui::OpenMode::NoScan;
-        else if (request.command == "packages-refresh")
+        else if (request.action == "refresh")
             mode = pkg::ui::OpenMode::ForceRefresh;
 
         // The words the user typed go into the window's own search box, so
@@ -116,10 +118,13 @@ public:
         if (auto* controller = ui()) {
             QMetaObject::invokeMethod(
                 controller,
-                [controller, mode, needle] {
+                [controller, mode, needle, settingsAction] {
                     if (!needle.isEmpty())
                         controller->setSearchText(needle);
-                    controller->openWindow(mode);
+                    if (settingsAction)
+                        controller->openSettings();
+                    else
+                        controller->openWindow(mode);
                 },
                 Qt::QueuedConnection);
         }
@@ -146,6 +151,12 @@ public:
                 },
                 Qt::QueuedConnection);
         }
+    }
+
+    void showSettings() override
+    {
+        if (auto* controller = ui())
+            QMetaObject::invokeMethod(controller, [controller] { controller->openSettings(); }, Qt::QueuedConnection);
     }
 
     void settingsChanged(const winshun::Json& settings) override
@@ -179,6 +190,21 @@ public:
 
     // The GUI thread calls this after the controller asked for the window.
     void setController(Controller* controller) { m_controller = controller; }
+
+    void updateHostSettings(const QVariantMap& values)
+    {
+        winshun::Json::Object settings;
+        for (auto it = values.cbegin(); it != values.cend(); ++it) {
+            const std::string key = it.key().toStdString();
+            if (it.value().metaType().id() == QMetaType::Bool)
+                settings.emplace(key, it.value().toBool());
+            else if (it.value().metaType().id() == QMetaType::Int)
+                settings.emplace(key, it.value().toInt());
+            else
+                settings.emplace(key, it.value().toString().toStdString());
+        }
+        updateSettings(std::move(settings));
+    }
 
 private:
     Controller* ui() { return m_controller; }
@@ -239,6 +265,7 @@ int main(int argc, char** argv)
     // The protocol loop owns stdio and never touches a QObject directly.
     PackagesPlugin plugin;
     plugin.setController(&controller);
+    controller.setSettingsUpdater([&plugin](const QVariantMap& values) { plugin.updateHostSettings(values); });
     controller.setClipboardWriter([&plugin](const QString& value,
                                              std::function<void(bool, const QString&)> done) {
         plugin.toolAsync("clipboard_copy", winshun::Json::Object {{"text", value.toStdString()}},
@@ -263,6 +290,17 @@ int main(int argc, char** argv)
     // The pointer lives in a shared slot because the close path has to null it as
     // well, and the scene object must outlive the last access to it.
     auto windowSlot = std::make_shared<QQuickWindow*>(nullptr);
+    auto settingsPending = std::make_shared<bool>(false);
+    QObject::connect(&controller, &Controller::settingsRequested, &app, [windowSlot, settingsPending] {
+        *settingsPending = true;
+        QMetaObject::invokeMethod(qApp, [windowSlot, settingsPending] {
+            if (!*settingsPending || !*windowSlot)
+                return;
+            if (QObject* popup = (*windowSlot)->findChild<QObject*>(QStringLiteral("settingsPopup")))
+                QMetaObject::invokeMethod(popup, "showSettings", Qt::DirectConnection);
+            *settingsPending = false;
+        }, Qt::QueuedConnection);
+    });
     QObject::connect(&controller, &Controller::windowShouldShow, &app, [&] {
         if (*windowSlot) {
             (*windowSlot)->show();
@@ -282,6 +320,11 @@ int main(int argc, char** argv)
         created->show();
         created->raise();
         created->requestActivate();
+        if (*settingsPending) {
+            if (QObject* popup = created->findChild<QObject*>(QStringLiteral("settingsPopup")))
+                QMetaObject::invokeMethod(popup, "showSettings", Qt::QueuedConnection);
+            *settingsPending = false;
+        }
     });
     QObject::connect(&controller, &Controller::windowShouldClose, &app, [windowSlot] {
         // Hiding only: the resident plugin keeps its cache, and the process stays

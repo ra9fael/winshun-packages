@@ -184,8 +184,7 @@ void Controller::applyAppearance(const QString& locale, bool dark, const QVarian
 void Controller::applySettings(const UiSettings& settings)
 {
     m_settings = settings;
-    // The settings popup binds to the summary; re-read it live when the user
-    // edits the plugin card (the host pushes settingsChanged mid-session).
+    // Refresh the settings controls when the host pushes settingsChanged.
     emit settingsApplied();
 }
 
@@ -223,6 +222,12 @@ void Controller::openWindow(OpenMode mode)
     if (policy == "always" || anyStale)
         // "stale" refreshes only what is stale; "always" refreshes both.
         startBackendRefresh(policy == "always");
+}
+
+void Controller::openSettings()
+{
+    openWindow(OpenMode::NoScan);
+    QTimer::singleShot(0, this, [this] { emit settingsRequested(); });
 }
 
 void Controller::runStartupScan()
@@ -505,25 +510,52 @@ void Controller::showCachedInfo(const info_cache::Entry& entry, int row, const s
     emit statusChanged();
 }
 
-QString Controller::settingsSummary() const
+QVariantMap Controller::settings() const
 {
-    const QString language = m_settings.language == "zh-CN" ? text("简体中文", "Chinese (Simplified)")
-                          : m_settings.language == "en-US" ? text("English", "English")
-                                                           : text("跟随 Win顺", "Follow WinShun");
-    const QString on = text("开", "on");
-    const QString off = text("关", "off");
-    return text("界面语言：", "Language: ") + language + "\n" +
-           text("选中后自动获取包信息：", "Fetch info on selection: ") +
-               (m_settings.autoFetchInfo ? on : off) + "\n" +
-           text("显示仅被枚举的项：", "Show observed-only rows: ") +
-               (m_settings.showObserved ? on : off) + "\n" +
-            text("缓存刷新间隔：", "Cache refresh interval: ") +
-                QString::number(m_settings.refreshMinutes) + text(" 分钟", " min") + "\n" +
-            text("详细诊断：", "Detailed diagnostics: ") + (m_settings.debugLogging ? on : off) + "\n" +
-            text("打开时扫描：", "Scan on open: ") + QString::fromStdString(m_settings.scanOnOpen) + "\n" +
-            text("启动时后台扫描：", "Scan at startup: ") + (m_settings.scanOnStartup ? on : off) + "\n" +
-            text("扫描要求管理员：", "Require administrator for scan: ") +
-                (m_settings.requireAdminForScan ? on : off);
+    return {{QStringLiteral("uiLanguage"), QString::fromStdString(m_settings.language.empty() ? "auto" : m_settings.language)},
+            {QStringLiteral("showObserved"), m_settings.showObserved},
+            {QStringLiteral("refreshMinutes"), m_settings.refreshMinutes},
+            {QStringLiteral("autoFetchInfo"), m_settings.autoFetchInfo},
+            {QStringLiteral("scanOnOpen"), QString::fromStdString(m_settings.scanOnOpen)},
+            {QStringLiteral("scanOnStartup"), m_settings.scanOnStartup},
+            {QStringLiteral("debugLogging"), m_settings.debugLogging}};
+}
+
+void Controller::updateSetting(const QString& key, const QVariant& value)
+{
+    if (key == QStringLiteral("uiLanguage")) {
+        const QString language = value.toString();
+        if (language != QStringLiteral("auto") && language != QStringLiteral("zh-CN") &&
+            language != QStringLiteral("en-US"))
+            return;
+        m_settings.language = language.toStdString();
+    } else if (key == QStringLiteral("showObserved")) {
+        m_settings.showObserved = value.toBool();
+    } else if (key == QStringLiteral("refreshMinutes")) {
+        const int minutes = value.toInt();
+        if (minutes < 0 || minutes > 1440)
+            return;
+        m_settings.refreshMinutes = minutes;
+    } else if (key == QStringLiteral("autoFetchInfo")) {
+        m_settings.autoFetchInfo = value.toBool();
+    } else if (key == QStringLiteral("scanOnOpen")) {
+        const QString policy = value.toString();
+        if (policy != QStringLiteral("stale") && policy != QStringLiteral("always") &&
+            policy != QStringLiteral("never"))
+            return;
+        m_settings.scanOnOpen = policy.toStdString();
+    } else if (key == QStringLiteral("scanOnStartup")) {
+        m_settings.scanOnStartup = value.toBool();
+    } else if (key == QStringLiteral("debugLogging")) {
+        m_settings.debugLogging = value.toBool();
+    } else {
+        return;
+    }
+    emit settingsApplied();
+    if (key == QStringLiteral("uiLanguage"))
+        emit statusChanged();
+    if (m_settingsUpdater)
+        m_settingsUpdater({{key, value}});
 }
 
 QString Controller::cacheSummary() const

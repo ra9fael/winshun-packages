@@ -5,7 +5,9 @@
 class TestPlugin : public winshun::Plugin {
 public:
     winshun::Items query(const winshun::Query&) override { ++queries; return {}; }
+    void showSettings() override { ++settingsRequests; }
     int queries = 0;
+    int settingsRequests = 0;
 };
 
 int main()
@@ -26,6 +28,12 @@ int main()
     winshun::detail::LineReader output(outputRead);
     std::string line;
     ok = output.next(line) && line.find("protocolVersion") != std::string::npos;
+    plugin.updateSettings(winshun::Json::Object {{"refreshMinutes", 0}});
+    ok = output.next(line) && ok;
+    const auto settingsRequest = winshun::Json::parse(line);
+    ok = ok && settingsRequest &&
+         (*settingsRequest)["method"].toString() == "winshun/settings/update" &&
+         (*settingsRequest)["params"]["settings"]["refreshMinutes"].toInt() == 0;
     plugin.toolAsync("clipboard_copy", winshun::Json::Object {{"text", "first"}},
                      [&](winshun::Json result) { ok = ok && !result.has("error"); ++callbacks; });
     plugin.toolAsync("clipboard_copy", winshun::Json::Object {{"text", "second"}},
@@ -44,10 +52,19 @@ int main()
     winshun::detail::writeLine("{\"id\":2,\"error\":{\"message\":\"permission denied\"}}", inputWrite);
     winshun::detail::writeLine("{\"id\":1,\"result\":{}}", inputWrite);
     winshun::detail::writeLine("{\"id\":1,\"result\":{}}", inputWrite);
+    winshun::detail::writeLine("{\"id\":102,\"method\":\"showSettings\",\"params\":{}}", inputWrite);
     winshun::detail::writeLine("{\"id\":101,\"method\":\"query\",\"params\":{}}", inputWrite);
+    bool sawSettingsResponse = false;
+    for (int i = 0; i < 2; ++i) {
+        ok = output.next(line) && ok;
+        const auto response = winshun::Json::parse(line);
+        if (response && (*response)["id"].toInt() == 102 && (*response)["result"].isObject())
+            sawSettingsResponse = true;
+    }
+    ok = ok && sawSettingsResponse;
     CloseHandle(inputWrite); // Third request must fail rather than succeed.
     server.join();
-    ok = ok && callbacks == 3 && plugin.queries == 1;
+    ok = ok && callbacks == 3 && plugin.queries == 1 && plugin.settingsRequests == 1;
     CloseHandle(inputRead);
     CloseHandle(outputRead);
     CloseHandle(outputWrite);

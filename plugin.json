@@ -3,7 +3,7 @@
   "manifest": 1,
   "id": "ra9fael.packages",
   "name": {"zh": "软件包", "en": "Packages"},
-  "version": "0.4.13",
+  "version": "0.4.14",
   "minWinShun": "0.22.0",
   "description": {
     "zh": "一站式查看、安装、卸载、升级 Scoop 与 WinGet 软件包：先查询，选中精确身份后再审阅计划并确认；不自动同意协议、不自行提权、不自动安装包管理器",
@@ -12,6 +12,7 @@
   "author": "ra9fael",
   "homepage": "https://github.com/ra9fael/winshun-packages",
   "license": "MIT",
+  "settingsWindow": true,
   "runtime": {
     "mode": "resident",
     "program": "packages.exe",
@@ -63,38 +64,15 @@
       "keyword": ["packages", "包管理"],
       "title": {"zh": "软件包搜索", "en": "Packages search"},
       "hint": {
-        "zh": "输入 packages 加空格后搜索包名；Enter 打开窗口",
-        "en": "Type packages then a space to search packages; Enter opens the window"
+        "zh": "输入 packages 加空格后搜索包名；可打开、仅看缓存、刷新或设置",
+        "en": "Type packages then a space to search; open, view cache, refresh or configure"
       },
       "icon": "glyph:U+E7B8",
       "actions": [
-        {"id": "open", "title": {"zh": "打开软件包窗口", "en": "Open Packages"}, "key": "Enter"}
-      ]
-    },
-    {
-      "id": "packages-open-only",
-      "keyword": ["pkgs-only", "包只读"],
-      "title": {"zh": "软件包窗口（不扫描）", "en": "Packages window (no scan)"},
-      "hint": {
-        "zh": "只打开窗口并显示已有缓存，不查询 WinGet / Scoop；适合只想看上次结果",
-        "en": "Opens the window with the existing cache only; WinGet / Scoop are not queried"
-      },
-      "icon": "glyph:U+E7B8",
-      "actions": [
-        {"id": "open", "title": {"zh": "打开窗口（不扫描）", "en": "Open without scanning"}, "key": "Enter"}
-      ]
-    },
-    {
-      "id": "packages-refresh",
-      "keyword": ["pkgs-refresh", "包刷新"],
-      "title": {"zh": "软件包窗口并刷新", "en": "Packages window and refresh"},
-      "hint": {
-        "zh": "打开窗口并立即强制重新查询 WinGet / Scoop，忽略缓存新鲜度",
-        "en": "Opens the window and forces a fresh WinGet / Scoop query, ignoring the cache's freshness"
-      },
-      "icon": "glyph:U+E7B8",
-      "actions": [
-        {"id": "open", "title": {"zh": "打开并刷新", "en": "Open and refresh"}, "key": "Enter"}
+        {"id": "open", "title": {"zh": "打开", "en": "Open"}, "key": "Enter"},
+        {"id": "open-only", "title": {"zh": "仅打开缓存", "en": "Open cache only"}},
+        {"id": "refresh", "title": {"zh": "打开并刷新", "en": "Open and refresh"}},
+        {"id": "settings", "title": {"zh": "设置", "en": "Settings"}}
       ]
     }
   ],
@@ -127,10 +105,14 @@
     {
       "key": "refreshMinutes",
       "type": "number",
+      "min": 0,
+      "max": 1440,
+      "step": 1,
+      "unit": {"zh": "分钟", "en": "minutes"},
       "title": {"zh": "缓存刷新间隔（分钟）", "en": "Cache refresh interval (minutes)"},
       "hint": {
-        "zh": "超过该时间未有成功查询时，列表标记为 stale；不会在后台自动查询或安装",
-        "en": "The list is marked stale once this much time passes without a successful query; nothing is queried or installed in the background"
+        "zh": "超过该时间未有成功查询时，列表标记为 stale；0 表示缓存始终过期。不会因缓存间隔在后台自动查询或安装",
+        "en": "The list is marked stale after this much time without a successful query; 0 keeps it perpetually stale. The interval never triggers background queries or installs"
       },
       "default": 30
     },

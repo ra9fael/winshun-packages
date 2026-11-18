@@ -38,6 +38,7 @@ CheckBox {
         font: control.font
         color: control.enabled ? theme.text : theme.faint
         verticalAlignment: Text.AlignVCenter
+        wrapMode: Text.WordWrap
         leftPadding: control.indicator.width + control.spacing
         visible: control.text !== ""
     }

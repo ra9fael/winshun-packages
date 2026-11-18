@@ -24,6 +24,9 @@ A reader's map of the implementation. Requirements live in the README; the desig
 - Query thread = one detached worker per refresh (`startBackendRefresh`) that forks two more threads (WinGet installed+updates / Scoop installed), results posted back to the GUI; `m_refreshInFlight` prevents re-entry.
 - Executor thread = `drainQueue` picks a runnable task and `runOneTask` drives it on a detached worker, one `platform::run` per phase; `logLine` re-posts to the GUI thread before writing, and `m_runCancel` is polled by both the executor and `run()`.
 - Search thread = single-flight for the Discover query; a stale result is dropped.
+- Settings sync = QML calls the Controller on the GUI thread with one changed key; the Controller passes that map to the SDK's `updateSettings()` notification. After persistence, the host sends the merged values back through `settingsChanged`. Incoming host values are applied without being sent back.
+
+The window's settings popup edits the seven host-managed manifest preferences. Caches remain in the plugin data folder; `refreshMinutes` of 0 keeps the cache perpetually stale. Search actions map to policy-based open, no-scan open, forced refresh and a no-scan Settings entry. `scanOnStartup` means one background scan when this lazy plugin starts; it does not preload the plugin when WinShun starts.
 
 ## Safety boundaries (where they live)
 

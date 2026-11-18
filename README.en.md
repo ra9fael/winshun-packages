@@ -13,7 +13,8 @@ It runs with **ordinary user rights** (no `elevated` permission). Queries only r
 - **Updates**: target versions from backend evidence, respecting `winget pin list` pins/holds.
 - **Tasks**: one authorisation per change, serial per manager; phases `install/uninstall › verify` with the state checked afterwards rather than trusting the exit code; failure, partial failure and unknown outcome are distinct.
 - **Diagnostics**: full command line and backend output in the task log (paths and tokens redacted); `0x8A15007D` (elevated process, user-scope package) and `0x87AF0008` (WinGet user database not writable) get explicit explanations.
-- **Caches**: inventory, updates, search results, package details, pin list and probe verdict are cached separately on disk and reused under `refreshMinutes` with their own invalidation rules; a failing backend does not force a rescan of the other.
+- **Settings and actions**: the window's settings popup edits all seven host preferences and synchronizes changes immediately. The `packages` search action offers policy-based open, cache-only open, forced refresh and Settings. Settings and cache-only open do not query a backend because of opening.
+- **Caches**: inventory, updates, search results, package details, pin list and probe verdict are cached separately on disk and reused under `refreshMinutes` with their own invalidation rules; 0 minutes keeps the cache perpetually stale. A failing backend does not force a rescan of the other. Plugin startup scan means a background query when this lazy plugin is started; it does not preload the plugin when WinShun starts.
 
 ## Screenshots
 
